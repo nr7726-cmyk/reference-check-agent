@@ -26,10 +26,11 @@ HEADING_PREFIX = re.compile(
     re.IGNORECASE,
 )
 PAREN_CITATION = re.compile(r"\(([^()]*?(?:19|20)\d{2}[^()]*)\)")
+AUTHOR_NAME = r"(?:[가-힣]{2,8}|[A-Z][A-Za-z'\u2019\u2013-]+)"
+AUTHOR_CONNECTOR = r"(?:\s*,\s*|\s*(?:와|과)\s*|\s+(?:및|그리고|and)\s+|\s*&\s*)"
 NARRATIVE_CITATION = re.compile(
-    r"(?P<author>[가-힣]{2,8}|[A-Z][A-Za-z'\u2019\u2013-]+"
-    r"(?:\s+(?:et\s+al\.|and\s+[A-Z][A-Za-z'\u2019\u2013-]+))?)"
-    r"\s*\((?P<year>(?:19|20)\d{2})\)"
+    rf"(?P<authors>{AUTHOR_NAME}(?:{AUTHOR_CONNECTOR}{AUTHOR_NAME})*"
+    r"(?:\s+et\s+al\.)?)\s*\((?P<year>(?:19|20)\d{2})[a-z]?\)"
 )
 MENTION = re.compile(
     r"(?P<author>[가-힣]{2,8}|[A-Z][A-Za-z'\u2019\u2013-]+(?:\s+et\s+al\.)?)"
@@ -146,13 +147,16 @@ def extract_citations(paragraphs: list[Paragraph]) -> list[Citation]:
             if mentions:
                 matches.append((match.start(), match.group(0), mentions))
         for match in NARRATIVE_CITATION.finditer(paragraph.text):
+            authors = _parse_narrative_authors(match.group("authors"))
             matches.append(
                 (
                     match.start(),
                     match.group(0),
                     [
                         CitationMention(
-                            author=match.group("author").strip(), year=int(match.group("year"))
+                            author=authors[0],
+                            coauthors=authors[1:],
+                            year=int(match.group("year")),
                         )
                     ],
                 )
@@ -179,6 +183,16 @@ def extract_citations(paragraphs: list[Paragraph]) -> list[Citation]:
                 )
             )
     return citations
+
+
+def _parse_narrative_authors(text: str) -> list[str]:
+    normalized = re.sub(r"\s+et\s+al\.$", "", text.strip())
+    authors = re.split(
+        r"\s*(?:,|&|\band\b|\b및\b|\b그리고\b)\s*|"
+        r"(?<=[A-Za-z가-힣])(?:와|과)\s*(?=[A-Z가-힣])",
+        normalized,
+    )
+    return [author.strip() for author in authors if author.strip()]
 
 
 def _parse_mentions(text: str) -> list[CitationMention]:

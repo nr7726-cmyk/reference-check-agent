@@ -126,25 +126,43 @@ class DeterministicRuleEngine:
 
     def _citation_reference_checks(self, manuscript: ParsedManuscript) -> Iterable[CheckResult]:
         cited_pairs = {
-            (normalize_name(mention.author), mention.year)
+            (normalize_name(author), mention.year)
             for citation in manuscript.citations
             for mention in citation.mentions
+            for author in [mention.author, *mention.coauthors]
         }
-        reference_pairs = {
+        primary_reference_pairs = {
             (normalize_name(reference.authors[0].raw), reference.year)
             for reference in manuscript.references
             if reference.authors and reference.year
         }
-        reference_authors = {author for author, _ in reference_pairs}
+        all_reference_pairs = {
+            (normalize_name(author.raw), reference.year)
+            for reference in manuscript.references
+            if reference.year
+            for author in reference.authors
+        }
+        reference_authors = {author for author, _ in all_reference_pairs}
 
         unmatched: list[tuple[Citation, str]] = []
         total_mentions = 0
         for citation in manuscript.citations:
             for mention in citation.mentions:
                 total_mentions += 1
-                pair = (normalize_name(mention.author), mention.year)
-                if pair not in reference_pairs:
-                    rule_id = "CR-03" if pair[0] in reference_authors else "CR-01"
+                candidate_pairs = {
+                    (normalize_name(author), mention.year)
+                    for author in [mention.author, *mention.coauthors]
+                }
+                primary_pair = (normalize_name(mention.author), mention.year)
+                if (
+                    primary_pair not in primary_reference_pairs
+                    and candidate_pairs.isdisjoint(all_reference_pairs)
+                ):
+                    rule_id = (
+                        "CR-03"
+                        if any(pair[0] in reference_authors for pair in candidate_pairs)
+                        else "CR-01"
+                    )
                     unmatched.append((citation, rule_id))
 
         if (

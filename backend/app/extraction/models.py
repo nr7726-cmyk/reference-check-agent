@@ -48,6 +48,7 @@ class ExtractedDocument(BaseModel):
 
 class CitationMention(BaseModel):
     author: str
+    coauthors: list[str] = Field(default_factory=list)
     year: int
 
 

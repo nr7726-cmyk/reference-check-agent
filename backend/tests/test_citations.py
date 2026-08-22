@@ -170,6 +170,68 @@ def test_multi_author_citation_matches_by_first_author_and_year() -> None:
     assert all(result.rule_id not in {"CR-01", "CR-03"} for result in results)
 
 
+@pytest.mark.parametrize(
+    ("text", "raw_text", "primary", "coauthors"),
+    [
+        ("Ralph와 Hegeman(2025)은 비교했다.", "Ralph와 Hegeman(2025)", "Ralph", ["Hegeman"]),
+        ("이승연, 김기영(2023)은 분석했다.", "이승연, 김기영(2023)", "이승연", ["김기영"]),
+        ("박성재와 이용구(2015)는 설명했다.", "박성재와 이용구(2015)", "박성재", ["이용구"]),
+    ],
+)
+def test_narrative_multi_author_citation_keeps_full_author_list(
+    text: str,
+    raw_text: str,
+    primary: str,
+    coauthors: list[str],
+) -> None:
+    document = ExtractedDocument(
+        format="hwp",
+        paragraphs=[
+            _paragraph(0, f"충분한 합성 본문 {text} " * 20),
+            _paragraph(1, "참고문헌"),
+            _paragraph(2, f"{primary}, {coauthors[0]} (2025). 합성 제목."),
+        ],
+    )
+    manuscript = parse_manuscript(document)
+    citation = manuscript.citations[0]
+
+    assert citation.raw_text == raw_text
+    assert citation.mentions[0].author == primary
+    assert citation.mentions[0].coauthors == coauthors
+
+
+def test_narrative_coauthor_fallback_matches_reference_author() -> None:
+    document = ExtractedDocument(
+        format="hwp",
+        paragraphs=[
+            _paragraph(0, "충분한 합성 본문 Ralph와 Hegeman(2025)은 비교했다. " * 20),
+            _paragraph(1, "참고문헌"),
+            _paragraph(2, "Other, Hegeman (2025). 합성 제목."),
+        ],
+    )
+    results = DeterministicRuleEngine().evaluate(parse_manuscript(document))
+
+    assert all(result.rule_id not in {"CR-01", "CR-03"} for result in results)
+
+
+def test_parenthetical_ampersand_and_year_suffix_still_parse() -> None:
+    document = ExtractedDocument(
+        format="hwp",
+        paragraphs=[
+            _paragraph(0, "충분한 합성 본문 (Vakkari & Serola, 2012; McCallum, 2017a) " * 20),
+            _paragraph(1, "References"),
+            _paragraph(2, "Vakkari, P., & Serola, S. (2012). Synthetic title."),
+            _paragraph(3, "McCallum, S. (2017a). Another synthetic title."),
+        ],
+    )
+    manuscript = parse_manuscript(document)
+
+    assert [
+        (mention.author, mention.year)
+        for mention in manuscript.citations[0].mentions
+    ] == [("Vakkari", 2012), ("McCallum", 2017)]
+
+
 def test_high_missing_ratio_is_one_review_result() -> None:
     citations = "; ".join(
         f"가상{chr(ord('가') + index)}, 2020" for index in range(8)
