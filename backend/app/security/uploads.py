@@ -69,9 +69,39 @@ def validate_upload(data: bytes, filename: str, content_type: str | None) -> Val
     )
 
 
-def validate_hwpx_container(data: bytes) -> None:
+def validate_upload_path(path: Path, filename: str, content_type: str | None) -> ValidatedUpload:
+    size = path.stat().st_size
+    if size == 0:
+        raise CorruptDocumentError("빈 파일은 업로드할 수 없습니다")
+    if size > MAX_FILE_SIZE:
+        raise SecurityLimitError("파일 크기는 30MB 이하여야 합니다")
+    extension = Path(filename).suffix.lower().lstrip(".")
+    if extension not in {"hwp", "hwpx"}:
+        raise UnsupportedDocumentError("지원 형식은 HWP와 HWPX입니다")
+    normalized_type = (content_type or mimetypes.guess_type(filename)[0] or "").lower()
+    if normalized_type not in ALLOWED_MIME_TYPES[extension]:
+        raise UnsupportedDocumentError("파일 MIME 형식이 확장자와 일치하지 않습니다")
+    with path.open("rb") as stream:
+        magic = stream.read(8)
+    if extension == "hwp":
+        if magic != HWP_MAGIC:
+            raise CorruptDocumentError("HWP OLE 서명이 올바르지 않습니다")
+        _validate_hwp_container(path)
+    else:
+        if not magic.startswith(ZIP_MAGICS):
+            raise CorruptDocumentError("HWPX ZIP 서명이 올바르지 않습니다")
+        validate_hwpx_container(path)
+    return ValidatedUpload(
+        format=cast(Literal["hwp", "hwpx"], extension),
+        size=size,
+        content_type=normalized_type,
+    )
+
+
+def validate_hwpx_container(data: bytes | Path) -> None:
+    source = io.BytesIO(data) if isinstance(data, bytes) else data
     try:
-        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        with zipfile.ZipFile(source) as archive:
             infos = archive.infolist()
             if len(infos) > MAX_ZIP_ENTRIES:
                 raise SecurityLimitError("HWPX ZIP 항목 수 제한을 초과했습니다")
@@ -112,9 +142,10 @@ def _validate_zip_entry(info: zipfile.ZipInfo) -> None:
             raise SecurityLimitError("비정상 HWPX 압축률이 감지되었습니다")
 
 
-def _validate_hwp_container(data: bytes) -> None:
+def _validate_hwp_container(data: bytes | Path) -> None:
+    source = io.BytesIO(data) if isinstance(data, bytes) else data
     try:
-        with olefile.OleFileIO(io.BytesIO(data)) as ole:
+        with olefile.OleFileIO(source) as ole:
             if not ole.exists("FileHeader") or not any(
                 parts[:1] == ["BodyText"] for parts in ole.listdir(streams=True, storages=False)
             ):

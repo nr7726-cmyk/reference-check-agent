@@ -11,6 +11,7 @@ from app.security.uploads import (
     new_upload_directory,
     validate_upload,
     validate_upload_count,
+    validate_upload_path,
     write_uuid_temp_file,
 )
 
@@ -20,6 +21,14 @@ def test_validates_hwpx_magic_mime_and_container() -> None:
         synthetic_fixture("normal.hwpx"), "manuscript.hwpx", "application/hwp+zip"
     )
     assert result.format == "hwpx"
+
+
+def test_validates_hwpx_from_disk_without_loading_request_body(tmp_path: Path) -> None:
+    path = tmp_path / "server-generated-id.hwpx"
+    path.write_bytes(synthetic_fixture("normal.hwpx"))
+    result = validate_upload_path(path, "manuscript.hwpx", "application/hwp+zip")
+    assert result.format == "hwpx"
+    assert result.size == path.stat().st_size
 
 
 @pytest.mark.parametrize(
