@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 from app.api.routes import router
 from app.config import Settings
@@ -70,6 +73,22 @@ def create_app(settings: Settings | None = None, clock: Clock = utc_now) -> Fast
             rule.rule_id == rule_id for rule_id, rule in RULES.items()
         )
         return {"status": "ready" if ready_state else "not-ready", "rules": len(RULES)}
+
+    static_dir = Path(os.getenv("STATIC_DIR", Path(__file__).parent / "static"))
+    if static_dir.is_dir():
+
+        @application.get("/", include_in_schema=False)
+        async def index() -> FileResponse:
+            return FileResponse(static_dir / "index.html")
+
+        @application.get("/{resource_path:path}", include_in_schema=False)
+        async def spa(resource_path: str) -> FileResponse:
+            if resource_path == "api" or resource_path.startswith(("api/", "health/")):
+                raise HTTPException(status_code=404)
+            candidate = (static_dir / resource_path).resolve()
+            if static_dir.resolve() in candidate.parents and candidate.is_file():
+                return FileResponse(candidate)
+            return FileResponse(static_dir / "index.html")
 
     return application
 
