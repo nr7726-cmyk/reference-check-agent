@@ -1,0 +1,30 @@
+# Python
+backend/.venv/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+frontend/dist/
+coverage/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Uploads and temporary documents
+uploads/
+tmp/
+temp/
+*.upload
+
+# Editor and OS
+.DS_Store
+Thumbs.db
+.vscode/
+
