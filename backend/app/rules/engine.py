@@ -4,27 +4,85 @@ import re
 from collections import defaultdict
 from typing import Iterable
 
-from app.extraction.models import Location, ParsedManuscript
+from app.extraction.models import Location, ParsedManuscript, ReferenceItem
 from app.rules.models import (
     Category,
     CheckResult,
     ResultStatus,
     RuleDefinition,
+    RuleSource,
     Severity,
 )
 from app.rules.normalization import normalize_name
-from app.rules.registry import RULES
+from app.rules.registry import APA_SUBTITLE_SOURCE, RULES
 
 INITIAL_PATTERN = re.compile(r"\b[A-Z]\.")
-CONTEXT_CONNECTOR = re.compile(r"\b(?:and|&)\b|\s(?:와|과)\s", re.IGNORECASE)
+WORD = re.compile(r"[A-Za-z]+")
+WESTERN_AND = re.compile(r"\band\b", re.IGNORECASE)
 BAD_SOURCE_SPACING = re.compile(r"출처\s+:")
 SUBTITLE_LOWERCASE = re.compile(r":\s*([a-z])")
+JOURNAL_DETAILS = re.compile(
+    r",\s*\d+(?:\(\d+\))?,\s*(?:\d+[-\u2013]\d+|[A-Za-z]?\d+)"
+)
+LOWERCASE_TITLE_WORDS = {
+    "a",
+    "an",
+    "and",
+    "as",
+    "at",
+    "but",
+    "by",
+    "for",
+    "in",
+    "nor",
+    "of",
+    "on",
+    "or",
+    "the",
+    "to",
+}
 
 
 class DeterministicRuleEngine:
     def evaluate(self, manuscript: ParsedManuscript) -> list[CheckResult]:
         results: list[CheckResult] = []
-        results.extend(self._citation_reference_checks(manuscript))
+        if not manuscript.body_text_sufficient:
+            results.append(
+                self._result(
+                    "CR-03",
+                    manuscript.document.paragraphs[0].location,
+                    "논문 본문을 충분히 추출하지 못했습니다",
+                    status=ResultStatus.NEEDS_CONTEXT,
+                    memo_template=(
+                        "논문 본문을 충분히 찾지 못했습니다. 표·도형 중심 문서 또는 "
+                        "표지·양식 파일인지 확인해 주세요."
+                    ),
+                )
+            )
+            return results
+        if manuscript.reference_section_found:
+            results.extend(self._citation_reference_checks(manuscript))
+        else:
+            location = (
+                manuscript.citations[0].location
+                if manuscript.citations
+                else manuscript.document.paragraphs[-1].location
+            )
+            results.append(
+                self._result(
+                    "CR-03",
+                    location,
+                    (
+                        "참고문헌 목록을 자동으로 찾지 못했습니다. "
+                        f"본문 인용 {len(manuscript.citations)}건만 추출했습니다"
+                    ),
+                    status=ResultStatus.NEEDS_CONTEXT,
+                    memo_template=(
+                        "참고문헌 목록 위치와 형식을 확인해 주세요. 자동으로 목록을 "
+                        "찾지 못해 본문 인용과의 왕복 대조를 생략했습니다."
+                    ),
+                )
+            )
         results.extend(self._compound_order_checks(manuscript))
         results.extend(self._english_conversion_checks(manuscript))
         results.extend(self._format_checks(manuscript))
@@ -120,7 +178,12 @@ class DeterministicRuleEngine:
                     "이 국문 참고문헌에 대응하는 영문화 항목을 확정할 수 없습니다",
                     status=ResultStatus.NEEDS_CONTEXT,
                 )
-        for reference in english:
+        converted = [
+            reference
+            for reference in english
+            if korean and reference.year in {item.year for item in korean}
+        ]
+        for reference in converted:
             if any(INITIAL_PATTERN.fullmatch(author.raw.strip()) for author in reference.authors):
                 yield self._result(
                     "CR-07",
@@ -137,27 +200,33 @@ class DeterministicRuleEngine:
 
     def _format_checks(self, manuscript: ParsedManuscript) -> Iterable[CheckResult]:
         for reference in manuscript.references:
+            capitalization_finding = _capitalization_finding(reference)
+            if capitalization_finding:
+                yield self._result("CR-08", reference.location, capitalization_finding)
             if reference.title and SUBTITLE_LOWERCASE.search(reference.title):
                 yield self._result(
                     "CR-08",
                     reference.location,
                     "콜론 뒤 부제의 첫 단어가 소문자로 시작합니다",
+                    source=APA_SUBTITLE_SOURCE,
+                    severity=Severity.WARNING,
+                    memo_template="콜론 뒤 부제의 첫 단어를 대문자로 시작해 주세요.",
                 )
             if BAD_SOURCE_SPACING.search(reference.raw_text):
                 yield self._result("CR-09", reference.location, "출처의 콜론 앞에 공백이 있습니다")
-            if reference.doi is None:
+            if _is_journal_article(reference) and reference.doi is None:
                 yield self._result(
                     "CR-10",
                     reference.location,
                     "DOI 필요 여부를 자료유형에 따라 확인해야 합니다",
                     status=ResultStatus.NEEDS_CONTEXT,
                 )
-            if CONTEXT_CONNECTOR.search(reference.raw_text):
+            author_text = reference.raw_text.split("(", 1)[0]
+            if reference.list_kind == "english" and WESTERN_AND.search(author_text):
                 yield self._result(
                     "CR-11",
                     reference.location,
-                    "저자 연결 표현은 문맥 확인이 필요합니다",
-                    status=ResultStatus.NEEDS_CONTEXT,
+                    "서양 참고문헌의 마지막 저자가 앤드기호(&)로 연결되지 않았습니다",
                 )
 
     def _result(
@@ -167,36 +236,108 @@ class DeterministicRuleEngine:
         finding: str,
         *,
         status: ResultStatus = ResultStatus.DETECTED,
+        source: RuleSource | None = None,
+        severity: Severity | None = None,
+        memo_template: str | None = None,
     ) -> CheckResult:
         rule = RULES[rule_id]
-        severity = rule.effective_severity()
+        result_source = source or rule.source
+        result_severity = severity or (
+            rule.severity if result_source.verified else Severity.NEEDS_REVIEW
+        )
         category = rule.category
-        if not rule.source.verified:
+        if not result_source.verified:
             status = ResultStatus.NEEDS_CONTEXT
             category = Category.NEEDS_REVIEW
         if status == ResultStatus.NEEDS_CONTEXT:
-            severity = Severity.NEEDS_REVIEW
+            result_severity = Severity.NEEDS_REVIEW
             if not rule.deterministic:
                 category = Category.NEEDS_REVIEW
-        memo = _memo_text(rule)
+        memo = _memo_text(
+            rule,
+            location=location,
+            source=result_source,
+            memo_template=memo_template,
+        )
         return CheckResult(
             id=f"{rule_id}-{location.id}",
             category=category,
-            severity=severity,
+            severity=result_severity,
             status=status,
             location=location,
             finding=finding,
             memo_text=memo,
             rule_id=rule_id,
-            rule_source=rule.source,
+            rule_source=result_source,
             confidence=1.0 if rule.deterministic else 0.5,
             sort_key=location.sort_key,
         )
 
 
-def _memo_text(rule: RuleDefinition) -> str:
-    source = rule.source
+def _memo_text(
+    rule: RuleDefinition,
+    *,
+    location: Location,
+    source: RuleSource | None = None,
+    memo_template: str | None = None,
+) -> str:
+    source = source or rule.source
     locator = source.clause_number or (
         f"{source.page}쪽 {source.section_title}" if source.page else source.section_title
     )
-    return f"{rule.memo_template} (근거: {source.document_name} {locator}, {rule.rule_id})"
+    action = memo_template or rule.memo_template
+    return f"{_human_location(location)}: {action} (근거: {source.document_name} {locator})"
+
+
+def _human_location(location: Location) -> str:
+    if location.reference_index is not None:
+        context = f" ({_short_context(location.display_hint)})" if location.display_hint else ""
+        return f"참고문헌 {location.reference_index + 1}번째 항목{context}"
+    if location.display_hint.startswith("본문 인용 "):
+        return location.display_hint
+    context = f" ({_short_context(location.display_hint)})" if location.display_hint else ""
+    return f"본문 {location.paragraph_index + 1}번째 문단{context}"
+
+
+def _short_context(text: str, limit: int = 48) -> str:
+    return text if len(text) <= limit else f"{text[: limit - 1]}…"
+
+
+def _is_journal_article(reference: ReferenceItem) -> bool:
+    return _journal_title(reference) is not None
+
+
+def _journal_title(reference: ReferenceItem) -> str | None:
+    if not reference.title:
+        return None
+    remainder = reference.raw_text.split(reference.title, 1)[-1]
+    details = JOURNAL_DETAILS.search(remainder)
+    if details is None:
+        return None
+    return remainder[: details.start()].strip(" .") or None
+
+
+def _capitalization_finding(reference: ReferenceItem) -> str | None:
+    if reference.list_kind != "english" or not reference.title:
+        return None
+    words = WORD.findall(reference.title)
+    if not words:
+        return None
+    if words[0][0].islower():
+        return "영문 제목의 첫 단어가 소문자로 시작합니다"
+    journal_title = _journal_title(reference)
+    if journal_title:
+        if _has_lowercase_title_word(journal_title):
+            return "영문 연속간행물명이 제목식 대문자로 표기되지 않았습니다"
+        return None
+    if _has_lowercase_title_word(reference.title):
+        return "영문 단행본 서명이 제목식 대문자로 표기되지 않았습니다"
+    return None
+
+
+def _has_lowercase_title_word(title: str) -> bool:
+    words = WORD.findall(title)
+    for word in words[1:]:
+        if word.lower() not in LOWERCASE_TITLE_WORDS and word[0].islower():
+            return True
+    return bool(words and words[0][0].islower())

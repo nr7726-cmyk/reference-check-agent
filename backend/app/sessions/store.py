@@ -10,7 +10,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID, uuid4
 
 from app.config import Settings
@@ -52,7 +52,7 @@ class SessionStore:
 
     async def create(
         self,
-        file_format: str,
+        file_format: Literal["hwp", "hwpx"],
         file_size: int,
         correlation_id: str,
         temp_path: Path,

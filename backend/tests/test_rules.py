@@ -16,7 +16,7 @@ from app.extraction.models import (
 from app.rules.engine import DeterministicRuleEngine
 from app.rules.models import CheckResult, ResultStatus, RuleSource, Severity
 from app.rules.normalization import normalize_text
-from app.rules.registry import RULES
+from app.rules.registry import COMMON, COMMON_VERSION, RULES, VERIFIED_AT
 
 
 def _location(paragraph: int, reference: Optional[int] = None) -> Location:
@@ -96,8 +96,10 @@ def test_requires_english_conversion_full_names_and_alphabetical_order() -> None
     english = _manuscript(
         [],
         [
-            _reference(0, "Zeta, Synthetic", 2020, kind="english"),
-            _reference(1, "A.", 2021, kind="english"),
+            _reference(0, "가상저자", 2020),
+            _reference(1, "또다른저자", 2021),
+            _reference(2, "Zeta, Synthetic", 2020, kind="english"),
+            _reference(3, "A.", 2021, kind="english"),
         ],
     )
     results = DeterministicRuleEngine().evaluate(english)
@@ -119,19 +121,128 @@ def test_safety_regressions() -> None:
     )
     results = DeterministicRuleEngine().evaluate(manuscript)
     rule_ids = {result.rule_id for result in results}
-    assert {"CR-08", "CR-09", "CR-11"} <= rule_ids
+    assert {"CR-08", "CR-09"} <= rule_ids
+    assert "CR-11" not in rule_ids
     assert all("하이퍼링크" not in result.finding for result in results)
-    context = next(result for result in results if result.rule_id == "CR-11")
-    assert context.status == ResultStatus.NEEDS_CONTEXT
+    subtitle = next(result for result in results if result.rule_id == "CR-08")
+    assert subtitle.severity == Severity.WARNING
+    assert subtitle.rule_source.document_name.startswith("Publication Manual")
+
+
+def test_cr08_distinguishes_article_and_book_capitalization() -> None:
+    manuscript = _manuscript(
+        [],
+        [
+            _reference(
+                0,
+                "Alpha, Synthetic",
+                2020,
+                kind="english",
+                title="Sentence style article title",
+                raw=(
+                    "Alpha, Synthetic. (2020). Sentence style article title. "
+                    "Journal of Examples, 2(1), 1-10. https://doi.org/10.1234/synthetic"
+                ),
+            ),
+            _reference(
+                1,
+                "Beta, Synthetic",
+                2021,
+                kind="english",
+                title="Book title with lowercase content",
+                raw=(
+                    "Beta, Synthetic. (2021). Book title with lowercase content. "
+                    "Seoul: Synthetic Press."
+                ),
+            ),
+            _reference(
+                2,
+                "Gamma, Synthetic",
+                2022,
+                kind="english",
+                title="Another sentence style article",
+                raw=(
+                    "Gamma, Synthetic. (2022). Another sentence style article. "
+                    "journal of Examples, 3(1), 11-20. "
+                    "https://doi.org/10.1234/another"
+                ),
+            ),
+        ],
+    )
+    results = DeterministicRuleEngine().evaluate(manuscript)
+    capitalization = [
+        result
+        for result in results
+        if result.rule_id == "CR-08"
+        and result.rule_source.document_name == COMMON
+    ]
+    assert len(capitalization) == 2
+    assert {result.location.reference_index for result in capitalization} == {1, 2}
+    assert all(result.severity == Severity.ERROR for result in capitalization)
+
+
+def test_cr11_only_checks_western_reference_author_connector() -> None:
+    manuscript = _manuscript(
+        [],
+        [
+            _reference(
+                0,
+                "Alpha and Beta",
+                2020,
+                kind="english",
+                raw="Alpha and Beta. (2020). Synthetic Title. Seoul: Synthetic Press.",
+            ),
+            _reference(
+                1,
+                "Gamma",
+                2021,
+                kind="english",
+                raw="Gamma. (2021). Research and Practice. Journal of Tests, 1(1), 1-2.",
+            ),
+            _reference(
+                2,
+                "가상과저자",
+                2022,
+                raw="가상과저자. (2022). 합성 제목.",
+            ),
+        ],
+    )
+    results = DeterministicRuleEngine().evaluate(manuscript)
+    connectors = [result for result in results if result.rule_id == "CR-11"]
+    assert len(connectors) == 1
+    assert connectors[0].location.reference_index == 0
+    assert connectors[0].severity == Severity.ERROR
 
 
 def test_normalizes_unicode_whitespace_punctuation_and_width() -> None:
     assert normalize_text("\uff21 lpha,  테스트") == normalize_text("Alpha 테스트")
 
 
-def test_unverified_rule_cannot_create_error() -> None:
-    assert RULES["CR-01"].source.verified is False
-    assert RULES["CR-01"].effective_severity() == Severity.NEEDS_REVIEW
+def test_verified_rule_evidence_and_unverified_safety() -> None:
+    expected_clauses = {
+        "CR-01": "Ⅱ-1)-(1)",
+        "CR-02": "Ⅱ-1)-(1)",
+        "CR-03": "Ⅱ-1)-(1)",
+        "CR-04": "Ⅰ-9)",  # noqa: RUF001 - official clause notation
+        "CR-05": "Ⅰ-7)",  # noqa: RUF001 - official clause notation
+        "CR-06": "Ⅱ-9)",
+        "CR-07": "Ⅱ-9) + Ⅱ-10)",
+        "CR-08": "Ⅱ-1)-(5)",
+        "CR-09": "Ⅱ-6)-(1)",
+        "CR-10": "Ⅱ-3)-(1)",
+        "CR-11": "Ⅱ-1)-(4)",
+    }
+    for rule_id, clause in expected_clauses.items():
+        source = RULES[rule_id].source
+        assert source.document_name == COMMON
+        assert source.version_or_published_at == COMMON_VERSION
+        assert source.clause_number == clause
+        assert source.verified_at == VERIFIED_AT
+        assert source.verified is (rule_id != "CR-06")
+    assert RULES["CR-06"].severity == Severity.WARNING
+    assert RULES["CR-06"].effective_severity() == Severity.NEEDS_REVIEW
+    assert RULES["CR-01"].effective_severity() == Severity.ERROR
+
     source = RuleSource(
         document_name="Synthetic rule",
         version_or_published_at="1",
@@ -151,13 +262,32 @@ def test_unverified_rule_cannot_create_error() -> None:
             location=_location(0),
             finding="synthetic",
             memo_text="synthetic",
-            rule_id="CR-01",
-            rule_source=RULES["CR-01"].source,
+            rule_id="CR-06",
+            rule_source=RULES["CR-06"].source,
             confidence=1,
             sort_key=(0, 0, 0, -1),
         )
 
-    result = DeterministicRuleEngine().evaluate(_manuscript([], [_reference(0, "Alpha", 2020)]))[0]
+    result = next(
+        item
+        for item in DeterministicRuleEngine().evaluate(
+            _manuscript([], [_reference(0, "가상저자", 2020)])
+        )
+        if item.rule_id == "CR-06"
+    )
     assert result.category.value == "확인 필요"
     assert result.severity == Severity.NEEDS_REVIEW
     assert result.status == ResultStatus.NEEDS_CONTEXT
+
+
+def test_memo_contains_actual_clause_and_rule_id() -> None:
+    manuscript = _manuscript(
+        [_citation([("Missing", 2020)])],
+        [_reference(0, "Alpha", 2021)],
+    )
+    result = next(
+        item for item in DeterministicRuleEngine().evaluate(manuscript)
+        if item.rule_id == "CR-01"
+    )
+    assert f"{COMMON} Ⅱ-1)-(1)" in result.memo_text
+    assert "CR-01" not in result.memo_text

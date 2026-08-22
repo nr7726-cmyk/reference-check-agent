@@ -1,5 +1,8 @@
+import pytest
+
 from app.extraction.citations import parse_manuscript
 from app.extraction.models import ExtractedDocument, Location, Paragraph
+from app.rules.engine import DeterministicRuleEngine
 
 
 def _paragraph(index: int, text: str) -> Paragraph:
@@ -48,3 +51,71 @@ def test_assigns_repeated_years_to_the_preceding_author() -> None:
     manuscript = parse_manuscript(document)
     assert [mention.year for mention in manuscript.citations[0].mentions] == [2021, 2020]
     assert manuscript.references[0].list_kind == "english"
+
+
+@pytest.mark.parametrize(
+    "heading",
+    ["참 고 문 헌:", "參考文獻", "인용문헌", "\u2164. 참고문헌", "Bibliography"],
+)
+def test_accepts_reference_heading_variants(heading: str) -> None:
+    document = ExtractedDocument(
+        format="hwp",
+        paragraphs=[
+            _paragraph(0, "충분한 합성 본문 " * 40),
+            _paragraph(1, heading),
+            _paragraph(2, "Synthetic, Author. (2020). Synthetic title."),
+        ],
+    )
+
+    manuscript = parse_manuscript(document)
+
+    assert manuscript.reference_section_found is True
+    assert len(manuscript.references) == 1
+
+
+def test_infers_unheaded_reference_run_and_rejects_title_false_positive() -> None:
+    paragraphs = [
+        _paragraph(0, "References of References라는 합성 논문 제목"),
+        *[_paragraph(index, "충분한 합성 본문 문장입니다. " * 8) for index in range(1, 6)],
+        _paragraph(6, "Synthetic, Alpha. (2020). First synthetic title."),
+        _paragraph(7, "Synthetic, Beta. (2021). Second synthetic title."),
+    ]
+    manuscript = parse_manuscript(
+        ExtractedDocument(format="hwp", paragraphs=paragraphs)
+    )
+
+    assert manuscript.reference_section_found is True
+    assert len(manuscript.references) == 2
+    assert all("References of References" not in item.raw_text for item in manuscript.references)
+
+
+def test_missing_reference_section_suppresses_bulk_missing_results() -> None:
+    paragraphs = [
+        _paragraph(index, f"충분한 합성 본문 (Synthetic, 202{index % 3}) " * 8)
+        for index in range(12)
+    ]
+    manuscript = parse_manuscript(
+        ExtractedDocument(format="hwp", paragraphs=paragraphs)
+    )
+
+    results = DeterministicRuleEngine().evaluate(manuscript)
+
+    assert manuscript.reference_section_found is False
+    assert len(results) == 1
+    assert results[0].rule_id == "CR-03"
+    assert "왕복 대조를 생략" in results[0].memo_text
+
+
+def test_tiny_extraction_returns_review_instead_of_normal() -> None:
+    manuscript = parse_manuscript(
+        ExtractedDocument(
+            format="hwp",
+            paragraphs=[_paragraph(index, "합성 양식") for index in range(6)],
+        )
+    )
+
+    results = DeterministicRuleEngine().evaluate(manuscript)
+
+    assert manuscript.body_text_sufficient is False
+    assert len(results) == 1
+    assert "본문을 충분히" in results[0].finding

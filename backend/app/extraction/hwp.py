@@ -13,7 +13,6 @@ import olefile  # type: ignore[import-untyped]
 
 from app.extraction.errors import (
     CorruptDocumentError,
-    PageCountUnknownError,
     SecurityLimitError,
     UnsupportedDocumentError,
 )
@@ -21,9 +20,11 @@ from app.extraction.models import ExtractedDocument, Location, Paragraph
 from app.security.uploads import HWP_MAGIC
 
 HWPTAG_PARA_TEXT = 67
+HWPTAG_LIST_HEADER = 72
 HWPTAG_MEMO_LIST = 93
 MAX_DECOMPRESSED_SECTION = 32 * 1024 * 1024
 MAX_DECOMPRESSION_RATIO = 100.0
+MAX_DEFLATE_TRAILER = 16
 SECTION_NAME = re.compile(r"^BodyText/Section(\d+)$")
 
 
@@ -84,9 +85,14 @@ def decode_record_paragraphs(data: bytes, section_index: int) -> tuple[list[Para
     warnings: list[str] = []
     unknown_tags: set[int] = set()
     memo_count = 0
+    skipped_paragraphs = 0
     for record in parse_record_stream(data):
         if record.tag == HWPTAG_PARA_TEXT:
-            text = decode_paragraph_text(record.payload)
+            try:
+                text = decode_paragraph_text(record.payload)
+            except CorruptDocumentError:
+                skipped_paragraphs += 1
+                continue
             if text:
                 paragraph_index = len(paragraphs)
                 paragraphs.append(
@@ -108,6 +114,10 @@ def decode_record_paragraphs(data: bytes, section_index: int) -> tuple[list[Para
             unknown_tags.add(record.tag)
     if memo_count:
         warnings.append(f"Section{section_index}: 메모 레코드 {memo_count}개를 확인했습니다")
+    if skipped_paragraphs:
+        warnings.append(
+            f"Section{section_index}: 디코딩할 수 없는 문단 {skipped_paragraphs}개를 건너뛰었습니다"
+        )
     if unknown_tags:
         tags = ", ".join(str(tag) for tag in sorted(unknown_tags))
         warnings.append(f"Section{section_index}: 알 수 없는 태그를 건너뛰었습니다: {tags}")
@@ -126,7 +136,7 @@ def decompress_body_text(data: bytes) -> bytes:
         raise CorruptDocumentError("HWP BodyText raw deflate 압축이 손상되었습니다") from exc
     if len(output) > MAX_DECOMPRESSED_SECTION or decompressor.unconsumed_tail:
         raise SecurityLimitError("HWP BodyText 압축 해제 크기 제한을 초과했습니다")
-    if not decompressor.eof or decompressor.unused_data:
+    if not decompressor.eof or len(decompressor.unused_data) > MAX_DEFLATE_TRAILER:
         raise CorruptDocumentError("HWP BodyText 압축 스트림이 완전하지 않습니다")
     if data and len(output) / len(data) > MAX_DECOMPRESSION_RATIO:
         raise SecurityLimitError("비정상 HWP BodyText 압축률이 감지되었습니다")
@@ -147,9 +157,7 @@ def extract_hwp(source: bytes | Path, *, page_count: int | None = None) -> Extra
                 raise UnsupportedDocumentError("암호화된 HWP는 지원하지 않습니다")
             if distributable:
                 raise UnsupportedDocumentError("배포용 HWP는 지원하지 않습니다")
-            if page_count is None:
-                raise PageCountUnknownError("페이지 수 확인 불가")
-            if page_count > 30:
+            if page_count is not None and page_count > 30:
                 raise UnsupportedDocumentError("원고는 최대 30쪽까지 지원합니다")
 
             sections: list[tuple[int, str]] = []
@@ -162,19 +170,38 @@ def extract_hwp(source: bytes | Path, *, page_count: int | None = None) -> Extra
                 raise CorruptDocumentError("HWP BodyText 섹션이 없습니다")
 
             paragraphs: list[Paragraph] = []
-            warnings: list[str] = []
+            warnings: list[str] = (
+                ["HWP 형식에서는 신뢰할 수 있는 페이지 수를 확인할 수 없어 문단 위치를 사용합니다"]
+                if page_count is None
+                else []
+            )
             for section_index, name in sorted(sections):
-                section_data = _read_required_stream(ole, name)
-                if compressed:
-                    section_data = decompress_body_text(section_data)
-                decoded, section_warnings = decode_record_paragraphs(section_data, section_index)
+                try:
+                    section_data = _read_required_stream(ole, name)
+                    if compressed:
+                        section_data = decompress_body_text(section_data)
+                    decoded, section_warnings = decode_record_paragraphs(
+                        section_data, section_index
+                    )
+                except SecurityLimitError:
+                    raise
+                except CorruptDocumentError:
+                    warnings.append(
+                        f"Section{section_index}: 손상된 본문 섹션을 건너뛰었습니다"
+                    )
+                    continue
                 paragraphs.extend(decoded)
                 warnings.extend(section_warnings)
     except OSError as exc:
         raise CorruptDocumentError("손상된 HWP OLE 컨테이너입니다") from exc
 
+    if not paragraphs:
+        raise CorruptDocumentError("HWP 본문 텍스트를 추출할 수 없습니다")
     return ExtractedDocument(
-        format="hwp", paragraphs=paragraphs, page_count=page_count, warnings=warnings
+        format="hwp",
+        paragraphs=paragraphs,
+        page_count=page_count,
+        warnings=warnings,
     )
 
 

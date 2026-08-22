@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "reference-check-agent-backend"
 version = "0.1.0"
 description = "Deterministic citation and reference checking backend"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 dependencies = [
   "defusedxml>=0.7.1,<1",
   "fastapi>=0.116,<1",
@@ -17,6 +17,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+ai = [
+  "agent-framework-core==1.15.0",
+  "agent-framework-github-copilot==1.0.3",
+  "github-copilot-sdk==1.0.2",
+]
 dev = [
   "httpx>=0.28,<1",
   "mypy>=1.16,<2",
@@ -34,18 +39,18 @@ addopts = "-q"
 testpaths = ["tests"]
 
 [tool.ruff]
-target-version = "py39"
+target-version = "py311"
 line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
-ignore = ["UP006", "UP035", "UP045"]
+ignore = ["UP006", "UP017", "UP035", "UP041", "UP042", "UP045"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["S101"]
 
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.11"
 strict = true
 plugins = ["pydantic.mypy"]
 files = ["app", "tests"]

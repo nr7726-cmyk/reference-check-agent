@@ -1,0 +1,6 @@
+defusedxml>=0.7.1,<1
+fastapi>=0.116,<1
+olefile>=0.47,<1
+pydantic>=2.11,<3
+python-multipart>=0.0.20,<1
+uvicorn[standard]>=0.35,<1

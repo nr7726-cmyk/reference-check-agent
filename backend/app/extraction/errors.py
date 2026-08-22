@@ -12,7 +12,3 @@ class CorruptDocumentError(DocumentError):
 
 class SecurityLimitError(DocumentError):
     """A defensive parser limit was exceeded."""
-
-
-class PageCountUnknownError(DocumentError):
-    """The document has no trustworthy page count."""

@@ -253,9 +253,13 @@ async function apiError(response: Response): Promise<string> {
 }
 
 function locationText(location: Location): string {
-  if (location.display_hint) return location.display_hint
-  const reference = location.reference_index === null ? '' : ` · 참고문헌 ${location.reference_index + 1}`
-  return `${location.section_label} · ${location.paragraph_index + 1}문단${reference}`
+  if (location.reference_index !== null) {
+    const context = location.display_hint ? ` (${location.display_hint})` : ''
+    return `참고문헌 ${location.reference_index + 1}번째 항목${context}`
+  }
+  if (location.display_hint.startsWith('본문 인용 ')) return location.display_hint
+  const context = location.display_hint ? ` · “${location.display_hint}”` : ''
+  return `본문 ${location.paragraph_index + 1}번째 문단${context}`
 }
 
 export default App

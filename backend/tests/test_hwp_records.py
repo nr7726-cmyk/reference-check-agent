@@ -1,3 +1,4 @@
+import io
 import struct
 import zlib
 
@@ -5,14 +6,17 @@ import pytest
 
 from app.extraction.errors import CorruptDocumentError, SecurityLimitError
 from app.extraction.hwp import (
+    HWPTAG_LIST_HEADER,
     HWPTAG_MEMO_LIST,
     HWPTAG_PARA_TEXT,
     decode_paragraph_text,
     decode_record_paragraphs,
     decompress_body_text,
+    extract_hwp,
     parse_file_header_flags,
     parse_record_stream,
 )
+from app.security.uploads import HWP_MAGIC
 
 
 def _record(tag: int, payload: bytes, *, level: int = 0, extended: bool = False) -> bytes:
@@ -72,3 +76,81 @@ def test_decompresses_raw_deflate_and_rejects_extreme_ratio() -> None:
 
     with pytest.raises(CorruptDocumentError):
         decompress_body_text(compressed[:-1])
+
+    assert decompress_body_text(compressed + b"12345678") == original
+    with pytest.raises(CorruptDocumentError):
+        decompress_body_text(compressed + b"x" * 17)
+
+
+def _file_header() -> bytes:
+    header = bytearray(40)
+    header[:18] = b"HWP Document File\x00"
+    header[32:36] = bytes((0, 0, 0, 5))
+    return bytes(header)
+
+
+class _SyntheticOle:
+    def __init__(self, sections: dict[str, bytes]) -> None:
+        self.sections = sections
+
+    def __enter__(self) -> "_SyntheticOle":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        return None
+
+    def listdir(
+        self, *, streams: bool, storages: bool
+    ) -> list[list[str]]:
+        assert streams is True
+        assert storages is False
+        return [name.split("/") for name in self.sections]
+
+    def exists(self, name: str) -> bool:
+        return name == "FileHeader" or name in self.sections
+
+    def openstream(self, name: str) -> io.BytesIO:
+        if name == "FileHeader":
+            return io.BytesIO(_file_header())
+        return io.BytesIO(self.sections[name])
+
+
+def test_hwp_without_page_count_extracts_normally(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    body = _record(HWPTAG_PARA_TEXT, "합성 본문과 참고문헌".encode("utf-16le"))
+    ole = _SyntheticOle({"BodyText/Section0": body})
+    monkeypatch.setattr("app.extraction.hwp.olefile.OleFileIO", lambda _: ole)
+
+    document = extract_hwp(HWP_MAGIC + b"synthetic")
+
+    assert document.page_count is None
+    assert [paragraph.text for paragraph in document.paragraphs] == ["합성 본문과 참고문헌"]
+    assert document.paragraphs[0].location.id == "loc:hwp:s0:p0:r0"
+    assert document.warnings
+
+
+def test_hwp_partial_section_failure_keeps_extractable_text(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    good = _record(HWPTAG_PARA_TEXT, "추출 가능한 합성 본문".encode("utf-16le"))
+    ole = _SyntheticOle(
+        {
+            "BodyText/Section0": b"\x01",
+            "BodyText/Section1": good,
+        }
+    )
+    monkeypatch.setattr("app.extraction.hwp.olefile.OleFileIO", lambda _: ole)
+
+    document = extract_hwp(HWP_MAGIC + b"synthetic")
+
+    assert [paragraph.text for paragraph in document.paragraphs] == ["추출 가능한 합성 본문"]
+    assert any("Section0" in warning for warning in document.warnings)
+
+
+def test_paragraph_text_inside_table_records_is_included() -> None:
+    data = _record(HWPTAG_LIST_HEADER, b"") + _record(
+        HWPTAG_PARA_TEXT,
+        "표 셀 안의 합성 참고문헌. (2024). 합성 제목.".encode("utf-16le"),
+        level=2,
+    )
+
+    paragraphs, _ = decode_record_paragraphs(data, 0)
+
+    assert paragraphs[0].text.startswith("표 셀 안의 합성 참고문헌")

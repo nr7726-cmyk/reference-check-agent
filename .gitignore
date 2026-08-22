@@ -1,5 +1,7 @@
 # Python
 backend/.venv/
+backend/.venv-ai/
+backend/.venv-bootstrap/
 .venv/
 __pycache__/
 *.py[cod]
@@ -27,4 +29,3 @@ temp/
 .DS_Store
 Thumbs.db
 .vscode/
-

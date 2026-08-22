@@ -9,7 +9,7 @@ from xml.etree.ElementTree import Element
 
 from defusedxml import ElementTree as SafeET
 
-from app.extraction.errors import CorruptDocumentError, PageCountUnknownError
+from app.extraction.errors import CorruptDocumentError
 from app.extraction.models import ExtractedDocument, Location, Paragraph
 from app.security.uploads import validate_hwpx_container
 
@@ -24,9 +24,7 @@ def extract_hwpx(source: bytes | Path) -> ExtractedDocument:
 
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         page_count = _read_page_count(archive)
-        if page_count is None:
-            raise PageCountUnknownError("페이지 수 확인 불가")
-        if page_count > 30:
+        if page_count is not None and page_count > 30:
             raise CorruptDocumentError("원고는 최대 30쪽까지 지원합니다")
 
         section_entries = sorted(
@@ -44,7 +42,17 @@ def extract_hwpx(source: bytes | Path) -> ExtractedDocument:
 
     if not paragraphs:
         raise CorruptDocumentError("HWPX 본문 문단을 찾을 수 없습니다")
-    return ExtractedDocument(format="hwpx", paragraphs=paragraphs, page_count=page_count)
+    warnings = (
+        ["페이지 수 메타데이터가 없어 문단 위치를 사용합니다"]
+        if page_count is None
+        else []
+    )
+    return ExtractedDocument(
+        format="hwpx",
+        paragraphs=paragraphs,
+        page_count=page_count,
+        warnings=warnings,
+    )
 
 
 def _read_page_count(archive: zipfile.ZipFile) -> int | None:

@@ -46,9 +46,12 @@ def _auth(created: dict[str, Any]) -> dict[str, str]:
 
 
 def _upload(client: TestClient, data: bytes, name: str = "synthetic.hwpx") -> Response:
-    return client.post(
-        "/api/v1/checks",
-        files=[("files", (name, data, "application/hwp+zip"))],
+    return cast(
+        Response,
+        client.post(
+            "/api/v1/checks",
+            files=[("files", (name, data, "application/hwp+zip"))],
+        ),
     )
 
 
@@ -230,7 +233,10 @@ def test_security_headers_cors_and_health(tmp_path: Path) -> None:
     with TestClient(app) as client:
         response = client.get("/health/ready", headers={"Origin": "https://editor.example"})
         assert response.status_code == 200
-        assert response.json() == {"status": "ready", "rules": 12}
+        body = response.json()
+        assert body["status"] == "ready"
+        assert body["rules"] == 12
+        assert body["ai"]["enabled"] is False
         assert response.headers["content-security-policy"].startswith("default-src")
         assert response.headers["strict-transport-security"].startswith("max-age=")
         assert response.headers["x-content-type-options"] == "nosniff"

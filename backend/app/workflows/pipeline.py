@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import logging
 import time
-from collections.abc import Callable
-from typing import Awaitable, Optional, TypeVar
+from collections.abc import Awaitable, Callable
+from typing import Optional, TypeVar, cast
 
+from app.config import Settings
 from app.extraction.citations import parse_manuscript
 from app.extraction.errors import DocumentError
 from app.extraction.hwp import extract_hwp
 from app.extraction.hwpx import extract_hwpx
+from app.extraction.models import ParsedManuscript
 from app.observability.logging import log_event
 from app.rules.engine import DeterministicRuleEngine
+from app.rules.models import CheckResult
 from app.sessions.models import CheckStatus, ErrorInfo, SessionResult
 from app.sessions.store import SessionState, SessionStore
 
@@ -53,6 +57,13 @@ class DeterministicPipeline:
             )
             manuscript = await _run_blocking(parse_manuscript, document)
             results = await _run_blocking(DeterministicRuleEngine().evaluate, manuscript)
+            await self._stage(
+                state,
+                CheckStatus.REVIEWING,
+                70,
+                "문맥 확인 항목과 수정 요청 문구를 검토하고 있습니다",
+            )
+            results = await _enrich_results(self.store, state, manuscript, results)
             for result in results:
                 stored = SessionResult(
                     **result.model_dump(),
@@ -70,7 +81,6 @@ class DeterministicPipeline:
                 self.store.clock(),
             )
 
-            # Stage 3 can inject Agent Framework/Copilot work here without changing API contracts.
             if self.ai_extension is not None:
                 await self.ai_extension(state)
 
@@ -175,3 +185,48 @@ def _public_error_message(exc: Exception) -> str:
     if isinstance(exc, DocumentError):
         return str(exc)
     return "검사 중 내부 오류가 발생했습니다"
+
+
+async def _enrich_results(
+    store: SessionStore,
+    state: SessionState,
+    manuscript: ParsedManuscript,
+    results: list[CheckResult],
+) -> list[CheckResult]:
+    if not store.settings.ai_enabled:
+        return results
+    enrich_with_agent_workflow = _load_agent_enricher()
+    if enrich_with_agent_workflow is None:
+        return results
+
+    async def emit_delta(text: str) -> None:
+        await state.events.publish(
+            "ai_delta",
+            {"text": text},
+            store.clock(),
+            retain=False,
+        )
+
+    try:
+        return await enrich_with_agent_workflow(
+            store.settings,
+            manuscript,
+            results,
+            emit_delta,
+        )
+    except Exception:
+        return results
+
+
+AgentEnricher = Callable[
+    [Settings, ParsedManuscript, list[CheckResult], Callable[[str], Awaitable[None]]],
+    Awaitable[list[CheckResult]],
+]
+
+
+def _load_agent_enricher() -> AgentEnricher | None:
+    try:
+        module = importlib.import_module("app.workflows.agent_workflow")
+    except ImportError:
+        return None
+    return cast(AgentEnricher, module.enrich_with_agent_workflow)

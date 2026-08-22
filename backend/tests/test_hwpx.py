@@ -5,7 +5,7 @@ from typing import Optional, Tuple
 import pytest
 from conftest import synthetic_fixture
 
-from app.extraction.errors import CorruptDocumentError, PageCountUnknownError
+from app.extraction.errors import CorruptDocumentError
 from app.extraction.hwpx import extract_hwpx
 
 
@@ -48,11 +48,13 @@ def _rewrite_archive(
     return output.getvalue()
 
 
-def test_rejects_unknown_or_excessive_page_count() -> None:
+def test_allows_unknown_page_count_and_rejects_excessive_count() -> None:
     normal = synthetic_fixture("normal.hwpx")
     without_page_count = _rewrite_archive(normal, remove="Contents/content.hpf")
-    with pytest.raises(PageCountUnknownError, match="페이지 수 확인 불가"):
-        extract_hwpx(without_page_count)
+    document = extract_hwpx(without_page_count)
+    assert document.page_count is None
+    assert document.paragraphs
+    assert document.warnings
 
     over_limit = _rewrite_archive(normal, replace=(b'content="2"', b'content="31"'))
     with pytest.raises(CorruptDocumentError, match="최대 30쪽"):

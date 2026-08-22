@@ -1,0 +1,4 @@
+-r requirements.txt
+agent-framework-core==1.15.0
+agent-framework-github-copilot==1.0.3
+github-copilot-sdk==1.0.2

@@ -11,6 +11,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
+from app.agents.diagnostics import AI_DIAGNOSTICS
 from app.api.routes import router
 from app.config import Settings
 from app.observability.middleware import CorrelationIdMiddleware
@@ -72,7 +73,20 @@ def create_app(settings: Settings | None = None, clock: Clock = utc_now) -> Fast
         ready_state = len(RULES) == 12 and all(
             rule.rule_id == rule_id for rule_id, rule in RULES.items()
         )
-        return {"status": "ready" if ready_state else "not-ready", "rules": len(RULES)}
+        return {
+            "status": "ready" if ready_state else "not-ready",
+            "rules": len(RULES),
+            "ai": {
+                "enabled": effective_settings.ai_enabled,
+                "credentials_configured": bool(effective_settings.copilot_github_token),
+                "runtime_configured": (
+                    effective_settings.copilot_cli_path is not None
+                    and effective_settings.copilot_cli_path.is_file()
+                ),
+                "fallback_count": AI_DIAGNOSTICS.fallback_count,
+                "quota_limit_reached": AI_DIAGNOSTICS.quota_limit_reached,
+            },
+        }
 
     static_dir = Path(os.getenv("STATIC_DIR", Path(__file__).parent / "static"))
     if static_dir.is_dir():

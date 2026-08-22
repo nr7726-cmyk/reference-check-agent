@@ -19,3 +19,16 @@ def test_structured_log_drops_manuscript_and_memo(caplog) -> None:  # type: igno
     output = caplog.text
     assert '"correlation_id": "cid"' in output
     assert "PRIVATE_SYNTHETIC" not in output
+
+
+def test_structured_log_redacts_token_patterns(caplog) -> None:  # type: ignore[no-untyped-def]
+    logger = logging.getLogger("token-redaction-test")
+    with caplog.at_level(logging.INFO, logger="token-redaction-test"):
+        log_event(
+            logger,
+            "pipeline",
+            correlation_id="github_pat_SYNTHETIC_NOT_A_SECRET",
+            stage="checking",
+        )
+    assert "github_pat_" not in caplog.text
+    assert "[REDACTED]" in caplog.text

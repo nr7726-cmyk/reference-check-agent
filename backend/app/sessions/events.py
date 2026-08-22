@@ -13,6 +13,7 @@ EVENT_TYPES = {
     "counts_changed",
     "completed",
     "failed",
+    "ai_delta",
 }
 
 

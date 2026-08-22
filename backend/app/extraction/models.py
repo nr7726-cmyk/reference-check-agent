@@ -42,7 +42,7 @@ class Paragraph(BaseModel):
 class ExtractedDocument(BaseModel):
     format: Literal["hwp", "hwpx"]
     paragraphs: list[Paragraph]
-    page_count: int = Field(ge=1, le=30)
+    page_count: Optional[int] = Field(default=None, ge=1, le=30)
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -86,3 +86,6 @@ class ParsedManuscript(BaseModel):
     document: ExtractedDocument
     citations: list[Citation]
     references: list[ReferenceItem]
+    reference_section_found: bool = True
+    body_text_sufficient: bool = True
+    warnings: list[str] = Field(default_factory=list)
