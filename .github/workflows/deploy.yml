@@ -1,0 +1,72 @@
+name: Deploy Azure Container App
+
+on:
+  workflow_dispatch:
+    inputs:
+      with_runtime:
+        description: Include the bundled Copilot CLI runtime
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build pinned Python 3.12 wheel set
+        if: inputs.with_runtime
+        shell: bash
+        run: |
+          # SDK 1.0.2 needs manylinux_2_28; pydantic-core still needs manylinux2014.
+          python -m pip download \
+            --dest "${RUNNER_TEMP}/wheelhouse" \
+            --requirement backend/requirements-ai.txt \
+            --platform manylinux_2_28_x86_64 \
+            --platform manylinux2014_x86_64 \
+            --only-binary=:all: \
+            --python-version 3.12
+
+      - name: Build image
+        shell: bash
+        env:
+          WITH_RUNTIME: ${{ inputs.with_runtime }}
+        run: |
+          az acr build \
+            --registry "${{ vars.AZURE_REGISTRY_NAME }}" \
+            --image "reference-check-agent:${GITHUB_SHA}" \
+            --file Dockerfile \
+            --build-arg "INSTALL_AI_RUNTIME=${WITH_RUNTIME}" \
+            .
+
+      - name: Deploy infrastructure
+        shell: bash
+        env:
+          WITH_RUNTIME: ${{ inputs.with_runtime }}
+          KEY_VAULT_NAME: ${{ vars.AZURE_KEY_VAULT_NAME }}
+          TOKEN_SECRET_URI: ${{ vars.GITHUB_TOKEN_SECRET_URI }}
+        run: |
+          if [[ "${WITH_RUNTIME}" != "true" ]]; then
+            KEY_VAULT_NAME=""
+            TOKEN_SECRET_URI=""
+          fi
+          az deployment group create \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --template-file infra/bicep/main.bicep \
+            --parameters \
+              appName="${{ vars.AZURE_APP_NAME }}" \
+              containerImage="${{ vars.AZURE_REGISTRY_NAME }}.azurecr.io/reference-check-agent:${GITHUB_SHA}" \
+              keyVaultName="${KEY_VAULT_NAME}" \
+              githubTokenSecretUri="${TOKEN_SECRET_URI}"
