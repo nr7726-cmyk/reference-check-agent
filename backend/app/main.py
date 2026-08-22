@@ -70,7 +70,7 @@ def create_app(settings: Settings | None = None, clock: Clock = utc_now) -> Fast
 
     @application.get("/health/ready")
     def ready() -> dict[str, object]:
-        ready_state = len(RULES) == 12 and all(
+        ready_state = len(RULES) >= 12 and all(
             rule.rule_id == rule_id for rule_id, rule in RULES.items()
         )
         return {

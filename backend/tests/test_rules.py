@@ -214,6 +214,100 @@ def test_cr11_only_checks_western_reference_author_connector() -> None:
     assert connectors[0].severity == Severity.ERROR
 
 
+@pytest.mark.parametrize(
+    ("raw_text", "corrected"),
+    [
+        ("(권누리. 권현석, 2020)", "(권누리, 권현석, 2020)"),
+        ("(권누리·권현석, 2020)", "(권누리, 권현석, 2020)"),
+        ("(권누리; 권현석, 2020)", "(권누리, 권현석, 2020)"),
+    ],
+)
+def test_cr13_detects_korean_coauthor_separator(raw_text: str, corrected: str) -> None:
+    citation = _citation([("권누리", 2020), ("권현석", 2020)])
+    citation.raw_text = raw_text
+    results = DeterministicRuleEngine().evaluate(_manuscript([citation], []))
+    result = next(item for item in results if item.rule_id == "CR-13")
+    assert result.severity == Severity.ERROR
+    assert corrected in result.memo_text
+    assert "Ⅰ-6)" in result.memo_text  # noqa: RUF001 - official clause notation
+
+
+@pytest.mark.parametrize(
+    "raw_text",
+    [
+        "(김영석, 이용재, 2018)",
+        "(Golder & Huberman, 2006)",
+        "(오동근 외, 2010)",
+        "(홍길동, 2020; 김철수, 2021)",
+        "(嶺南 烈女傳, 1905)",
+    ],
+)
+def test_cr13_ignores_valid_or_non_korean_separators(raw_text: str) -> None:
+    citation = _citation([("합성저자", 2020)])
+    citation.raw_text = raw_text
+    results = DeterministicRuleEngine().evaluate(_manuscript([citation], []))
+    assert all(result.rule_id != "CR-13" for result in results)
+
+
+def test_cr13_ignores_names_and_periods_outside_parenthetical_citations() -> None:
+    manuscript = _manuscript(
+        [],
+        [
+            _reference(
+                0,
+                "Hoffer, J. A.",
+                2020,
+                kind="english",
+                raw="Hoffer, J. A. (2020). 한국도서관\u2024정보학회지.",
+            )
+        ],
+    )
+    assert all(
+        result.rule_id != "CR-13"
+        for result in DeterministicRuleEngine().evaluate(manuscript)
+    )
+
+
+@pytest.mark.parametrize(
+    ("raw_text", "clause"),
+    [
+        ("윤희윤. (2020). 문명과 매체, 그리고 도서관. 대구: 합성출판사.", "Ⅱ-2)-(1)"),
+        (
+            "정영미, 배정희. (2015). 합성 제목. 합성학회지, 1(1), 1-10.",
+            "Ⅱ-3)-(1)",
+        ),
+    ],
+)
+def test_cr14_removes_period_after_korean_author(raw_text: str, clause: str) -> None:
+    reference = _reference(0, "윤희윤", 2020, raw=raw_text)
+    result = next(
+        item
+        for item in DeterministicRuleEngine().evaluate(_manuscript([], [reference]))
+        if item.rule_id == "CR-14"
+    )
+    assert result.severity == Severity.ERROR
+    assert clause in result.memo_text
+    assert "저자명 뒤의 온점을 삭제" in result.memo_text
+
+
+@pytest.mark.parametrize(
+    "raw_text",
+    [
+        "윤희윤 (2020). 합성 제목.",
+        "Caplan, P. (2003). Synthetic title.",
+        "Hoffer, J. A., George, J., & Valacich, J. S. (1996). Synthetic title.",
+        "남태우, 류반디 (2012a). 합성 제목.",
+    ],
+)
+def test_cr14_ignores_valid_korean_and_western_author_forms(raw_text: str) -> None:
+    kind = "english" if raw_text[0].isascii() else "korean"
+    reference = _reference(0, "합성저자", 2020, kind=kind, raw=raw_text)
+    assert all(
+        result.rule_id != "CR-14"
+        for result in DeterministicRuleEngine().evaluate(_manuscript([], [reference]))
+    )
+
+
 def test_normalizes_unicode_whitespace_punctuation_and_width() -> None:
     assert normalize_text("\uff21 lpha,  테스트") == normalize_text("Alpha 테스트")
 
@@ -231,6 +325,8 @@ def test_verified_rule_evidence_and_unverified_safety() -> None:
         "CR-09": "Ⅱ-6)-(1)",
         "CR-10": "Ⅱ-3)-(1)",
         "CR-11": "Ⅱ-1)-(4)",
+        "CR-13": "Ⅰ-6)",  # noqa: RUF001 - official clause notation
+        "CR-14": "Ⅱ-2)-(1)",
     }
     for rule_id, clause in expected_clauses.items():
         source = RULES[rule_id].source

@@ -235,7 +235,7 @@ def test_security_headers_cors_and_health(tmp_path: Path) -> None:
         assert response.status_code == 200
         body = response.json()
         assert body["status"] == "ready"
-        assert body["rules"] == 12
+        assert body["rules"] >= 14
         assert body["ai"]["enabled"] is False
         assert response.headers["content-security-policy"].startswith("default-src")
         assert response.headers["strict-transport-security"].startswith("max-age=")

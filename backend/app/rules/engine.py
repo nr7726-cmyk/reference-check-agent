@@ -21,6 +21,17 @@ WORD = re.compile(r"[A-Za-z]+")
 WESTERN_AND = re.compile(r"\band\b", re.IGNORECASE)
 BAD_SOURCE_SPACING = re.compile(r"출처\s+:")
 SUBTITLE_LOWERCASE = re.compile(r":\s*([a-z])")
+KOREAN_COAUTHOR_SEPARATOR = re.compile(
+    r"(?P<first>[가-힣]{2,4})\s*(?P<separator>[.·\u2024ㆍ/])\s*(?P<second>[가-힣]{2,4})"
+)
+KOREAN_COAUTHOR_AND = re.compile(
+    r"(?P<first>[가-힣]{2,4})\s+and\s+(?P<second>[가-힣]{2,4})",
+    re.IGNORECASE,
+)
+KOREAN_AUTHOR_PERIOD = re.compile(
+    r"^(?P<authors>[가-힣]{2,4}(?:\s*,\s*[가-힣]{2,4})*)\.\s+"
+    r"(?P<year>\((?:19|20)\d{2}[a-z]?\))"
+)
 JOURNAL_DETAILS = re.compile(
     r",\s*\d+(?:\(\d+\))?,\s*(?:\d+[-\u2013]\d+|[A-Za-z]?\d+)"
 )
@@ -84,6 +95,7 @@ class DeterministicRuleEngine:
                 )
             )
         results.extend(self._compound_order_checks(manuscript))
+        results.extend(self._citation_author_separator_checks(manuscript))
         results.extend(self._english_conversion_checks(manuscript))
         results.extend(self._format_checks(manuscript))
         if not results:
@@ -198,8 +210,57 @@ class DeterministicRuleEngine:
                 "CR-07", english[0].location, "영문화 참고문헌이 영문명 알파벳순이 아닙니다"
             )
 
+    def _citation_author_separator_checks(
+        self, manuscript: ParsedManuscript
+    ) -> Iterable[CheckResult]:
+        for citation in manuscript.citations:
+            inner = (
+                citation.raw_text[1:-1]
+                if citation.raw_text.startswith("(")
+                else citation.raw_text
+            )
+            match = KOREAN_COAUTHOR_SEPARATOR.search(inner)
+            if match is None:
+                semicolon = _misused_coauthor_semicolon(inner)
+                match = semicolon or KOREAN_COAUTHOR_AND.search(inner)
+            if match is None:
+                continue
+            corrected = (
+                citation.raw_text[: match.start() + 1]
+                + f"{match.group('first')}, {match.group('second')}"
+                + citation.raw_text[match.end() + 1 :]
+            )
+            yield self._result(
+                "CR-13",
+                citation.location,
+                f"본문 인용 {citation.raw_text}에서 공저자 구분자가 잘못되었습니다",
+                memo_template=(
+                    "공저자는 쉼표(, )로 구분해야 합니다. "
+                    f"'{corrected}' 형식으로 수정해 주세요."
+                ),
+            )
+
     def _format_checks(self, manuscript: ParsedManuscript) -> Iterable[CheckResult]:
         for reference in manuscript.references:
+            author_period = KOREAN_AUTHOR_PERIOD.search(reference.raw_text)
+            if reference.list_kind == "korean" and author_period:
+                clause = _reference_format_clause(reference)
+                source = RULES["CR-14"].source.model_copy(
+                    update={"clause_number": clause, "section_title": clause}
+                )
+                corrected = (
+                    f"{author_period.group('authors')} {author_period.group('year')}."
+                )
+                yield self._result(
+                    "CR-14",
+                    reference.location,
+                    "국문 저자명 뒤에 불필요한 온점이 있습니다",
+                    source=source,
+                    memo_template=(
+                        "저자명 뒤의 온점을 삭제해 주세요. "
+                        f"'{corrected}' 형식으로 수정해 주세요."
+                    ),
+                )
             capitalization_finding = _capitalization_finding(reference)
             if capitalization_finding:
                 yield self._result("CR-08", reference.location, capitalization_finding)
@@ -301,6 +362,28 @@ def _human_location(location: Location) -> str:
 
 def _short_context(text: str, limit: int = 48) -> str:
     return text if len(text) <= limit else f"{text[: limit - 1]}…"
+
+
+def _misused_coauthor_semicolon(text: str) -> re.Match[str] | None:
+    pattern = re.compile(
+        r"(?P<first>[가-힣]{2,4})\s*(?P<separator>;)\s*"
+        r"(?P<second>[가-힣]{2,4})(?=\s*,\s*(?:19|20)\d{2})"
+    )
+    match = pattern.search(text)
+    if match is None:
+        return None
+    before = text[: match.start()]
+    return None if re.search(r"(?:19|20)\d{2}", before) else match
+
+
+def _reference_format_clause(reference: ReferenceItem) -> str:
+    if _is_journal_article(reference):
+        return "Ⅱ-3)-(1)"
+    if reference.url:
+        return "Ⅱ-6)-(1)"
+    if "학위" in reference.raw_text:
+        return "Ⅱ-4)-(1)"
+    return "Ⅱ-2)-(1)"
 
 
 def _is_journal_article(reference: ReferenceItem) -> bool:

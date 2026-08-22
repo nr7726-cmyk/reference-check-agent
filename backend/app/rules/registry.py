@@ -143,4 +143,20 @@ RULES: dict[str, RuleDefinition] = {
         memo_template="수정 요청 없음",
         deterministic=True,
     ),
+    "CR-13": RuleDefinition(
+        rule_id="CR-13",
+        category=Category.FORMAT,
+        severity=Severity.ERROR,
+        source=_common_source("Ⅰ-6)"),  # noqa: RUF001 - official clause notation
+        memo_template="국내문헌 공저자 이름을 쉼표(, )로 구분해 주세요.",
+        deterministic=True,
+    ),
+    "CR-14": RuleDefinition(
+        rule_id="CR-14",
+        category=Category.FORMAT,
+        severity=Severity.ERROR,
+        source=_common_source("Ⅱ-2)-(1)"),
+        memo_template="국문 저자명 뒤의 온점을 삭제해 주세요.",
+        deterministic=True,
+    ),
 }

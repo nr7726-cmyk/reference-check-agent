@@ -52,7 +52,7 @@ class RuleSource(BaseModel):
 
 
 class RuleDefinition(BaseModel):
-    rule_id: str = Field(pattern=r"^CR-(0[1-9]|1[0-2])$")
+    rule_id: str = Field(pattern=r"^CR-(0[1-9]|[1-9][0-9])$")
     category: Category
     severity: Severity
     source: RuleSource
