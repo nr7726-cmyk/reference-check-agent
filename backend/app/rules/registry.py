@@ -34,7 +34,7 @@ RULES: dict[str, RuleDefinition] = {
         category=Category.MISSING,
         severity=Severity.ERROR,
         source=_common_source("Ⅱ-1)-(1)"),
-        memo_template="본문 인용에 대응하는 참고문헌을 추가해 주세요.",
+        memo_template="본문 인용에 대응하는 참고문헌 추가 필요",
         deterministic=True,
     ),
     "CR-02": RuleDefinition(
@@ -43,8 +43,8 @@ RULES: dict[str, RuleDefinition] = {
         severity=Severity.WARNING,
         source=_common_source("Ⅱ-1)-(1)"),
         memo_template=(
-            "이 참고문헌의 본문 인용 위치를 확인해 주세요. "
-            "인용하지 않았다면 목록에서 제외해 주세요."
+            "본문 인용 미확인, 인용 위치 확인 요. "
+            "미인용 문헌이면 목록 제외 필요"
         ),
         deterministic=True,
     ),
@@ -53,7 +53,7 @@ RULES: dict[str, RuleDefinition] = {
         category=Category.MISMATCH,
         severity=Severity.ERROR,
         source=_common_source("Ⅱ-1)-(1)"),
-        memo_template="본문 인용과 참고문헌의 저자명·연도·제목이 일치하도록 수정해 주세요.",
+        memo_template="본문 인용과 참고문헌의 저자명·연도·제목 일치 필요",
         deterministic=False,
     ),
     "CR-04": RuleDefinition(
@@ -61,7 +61,7 @@ RULES: dict[str, RuleDefinition] = {
         category=Category.FORMAT,
         severity=Severity.ERROR,
         source=_common_source("Ⅰ-9)"),  # noqa: RUF001 - official clause notation
-        memo_template="서로 다른 저자의 복합 인용을 참고문헌 배열순으로 정렬해 주세요.",
+        memo_template="서로 다른 저자의 복합 인용을 참고문헌 배열순으로 정렬 필요",
         deterministic=True,
     ),
     "CR-05": RuleDefinition(
@@ -69,7 +69,7 @@ RULES: dict[str, RuleDefinition] = {
         category=Category.FORMAT,
         severity=Severity.ERROR,
         source=_common_source("Ⅰ-7)"),  # noqa: RUF001 - official clause notation
-        memo_template="동일 저자의 복합 인용을 연대순으로 정렬해 주세요.",
+        memo_template="동일 저자의 복합 인용을 연대순으로 정렬 필요",
         deterministic=True,
     ),
     "CR-06": RuleDefinition(
@@ -78,8 +78,8 @@ RULES: dict[str, RuleDefinition] = {
         severity=Severity.WARNING,
         source=_common_source("Ⅱ-9)", verified=False),
         memo_template=(
-            "학회 투고규정의 병기 의무를 확인하고 "
-            "국문 참고문헌의 영문화 목록을 검토해 주세요."
+            "학회 투고규정의 병기 의무 확인 및 "
+            "국문 참고문헌 영문화 목록 검토 필요"
         ),
         deterministic=True,
     ),
@@ -89,7 +89,7 @@ RULES: dict[str, RuleDefinition] = {
         severity=Severity.ERROR,
         source=_common_source("Ⅱ-9) + Ⅱ-10)"),
         memo_template=(
-            "한국 저자 이름을 전체 영문명으로 표기하고 영문명 알파벳순으로 재배열해 주세요."
+            "한국 저자 이름 전체 영문명 표기 및 영문명 알파벳순 재배열 필요"
         ),
         deterministic=True,
     ),
@@ -99,8 +99,8 @@ RULES: dict[str, RuleDefinition] = {
         severity=Severity.ERROR,
         source=_common_source("Ⅱ-1)-(5)"),
         memo_template=(
-            "연속간행물 논문명은 문장식 대문자 표기를, "
-            "단행본 서명과 간행물명은 제목식 대문자 표기를 적용해 주세요."
+            "연속간행물 논문명은 문장식 대문자 표기, "
+            "단행본 서명과 간행물명은 제목식 대문자 표기 적용 필요"
         ),
         deterministic=True,
     ),
@@ -109,7 +109,7 @@ RULES: dict[str, RuleDefinition] = {
         category=Category.FORMAT,
         severity=Severity.ERROR,
         source=_common_source("Ⅱ-6)-(1)"),
-        memo_template="출처 표기를 '출처: URL' 형식으로 수정해 주세요.",
+        memo_template="출처 표기를 '출처: URL' 형식으로 수정 필요",
         deterministic=True,
     ),
     "CR-10": RuleDefinition(
@@ -117,7 +117,7 @@ RULES: dict[str, RuleDefinition] = {
         category=Category.MISSING,
         severity=Severity.WARNING,
         source=_common_source("Ⅱ-3)-(1)"),
-        memo_template="자료유형을 확인하고 필요한 경우 DOI를 추가해 주세요.",
+        memo_template="자료유형 확인 및 DOI가 확인되는 경우 추가 필요",
         deterministic=False,
     ),
     "CR-11": RuleDefinition(
@@ -125,7 +125,7 @@ RULES: dict[str, RuleDefinition] = {
         category=Category.FORMAT,
         severity=Severity.ERROR,
         source=_common_source("Ⅱ-1)-(4)"),
-        memo_template="서양 참고문헌의 마지막 저자 앞에 앤드기호(&)를 표기해 주세요.",
+        memo_template="서양 참고문헌의 마지막 저자 앞에 앤드기호(&) 표기 필요",
         deterministic=True,
     ),
     "CR-12": RuleDefinition(
@@ -148,7 +148,7 @@ RULES: dict[str, RuleDefinition] = {
         category=Category.FORMAT,
         severity=Severity.ERROR,
         source=_common_source("Ⅰ-6)"),  # noqa: RUF001 - official clause notation
-        memo_template="국내문헌 공저자 이름을 쉼표(, )로 구분해 주세요.",
+        memo_template="국내문헌 공저자 이름 구분자 오류, 쉼표(, ) 사용 필요",
         deterministic=True,
     ),
     "CR-14": RuleDefinition(
@@ -156,7 +156,7 @@ RULES: dict[str, RuleDefinition] = {
         category=Category.FORMAT,
         severity=Severity.ERROR,
         source=_common_source("Ⅱ-2)-(1)"),
-        memo_template="국문 저자명 뒤의 온점을 삭제해 주세요.",
+        memo_template="국문 저자명 뒤 온점 삭제 필요",
         deterministic=True,
     ),
     "CR-15": RuleDefinition(
@@ -164,7 +164,7 @@ RULES: dict[str, RuleDefinition] = {
         category=Category.FORMAT,
         severity=Severity.ERROR,
         source=_common_source("Ⅱ-1)-(1)"),
-        memo_template="참고문헌 자료군의 배열 순서를 바로잡아 주세요.",
+        memo_template="참고문헌 자료군 배열 순서 수정 필요",
         deterministic=True,
     ),
     "CR-16": RuleDefinition(
@@ -172,7 +172,7 @@ RULES: dict[str, RuleDefinition] = {
         category=Category.FORMAT,
         severity=Severity.ERROR,
         source=_common_source("Ⅱ-1)-(2)"),
-        memo_template="참고문헌을 저자명 가나다순으로 배열해 주세요.",
+        memo_template="참고문헌 저자명 가나다순 배열 필요",
         deterministic=True,
     ),
     "CR-17": RuleDefinition(
@@ -180,7 +180,7 @@ RULES: dict[str, RuleDefinition] = {
         category=Category.FORMAT,
         severity=Severity.ERROR,
         source=_common_source("Ⅱ-1)-(2)"),
-        memo_template="동일 저자의 문헌을 오래된 출판연도순으로 배열해 주세요.",
+        memo_template="동일 저자 문헌의 오래된 출판연도순 배열 필요",
         deterministic=True,
     ),
     "CR-18": RuleDefinition(
@@ -188,7 +188,7 @@ RULES: dict[str, RuleDefinition] = {
         category=Category.FORMAT,
         severity=Severity.ERROR,
         source=_common_source("Ⅱ-3)-(2)"),
-        memo_template="동일 저자·동일 연도 문헌의 연도 뒤에 a, b, c를 붙여 주세요.",
+        memo_template="동일 저자·동일 연도 문헌의 연도 뒤 a, b, c 구분 필요",
         deterministic=True,
     ),
     "CR-19": RuleDefinition(
@@ -196,7 +196,7 @@ RULES: dict[str, RuleDefinition] = {
         category=Category.NEEDS_REVIEW,
         severity=Severity.NEEDS_REVIEW,
         source=_common_source("Ⅱ-1)-(1)"),
-        memo_template="이 참고문헌의 국내·서양·동양문헌 구분을 확인해 주세요.",
+        memo_template="해당 참고문헌의 국내·서양·동양문헌 구분 확인 요",
         deterministic=False,
     ),
 }

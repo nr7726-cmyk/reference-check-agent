@@ -79,8 +79,8 @@ class DeterministicRuleEngine:
                     "논문 본문을 충분히 추출하지 못했습니다",
                     status=ResultStatus.NEEDS_CONTEXT,
                     memo_template=(
-                        "논문 본문을 충분히 찾지 못했습니다. 표·도형 중심 문서 또는 "
-                        "표지·양식 파일인지 확인해 주세요."
+                        "논문 본문 추출 불충분. 표·도형 중심 문서 또는 "
+                        "표지·양식 파일 여부 확인 요"
                     ),
                 )
             )
@@ -103,8 +103,8 @@ class DeterministicRuleEngine:
                     ),
                     status=ResultStatus.NEEDS_CONTEXT,
                     memo_template=(
-                        "참고문헌 목록 위치와 형식을 확인해 주세요. 확실한 경계를 "
-                        "찾지 못해 본문 인용과의 왕복 대조를 생략했습니다."
+                        "참고문헌 목록 위치와 형식 확인 요. 확실한 경계 미검출로 "
+                        "본문 인용과의 왕복 대조 생략"
                     ),
                 )
             )
@@ -155,8 +155,8 @@ class DeterministicRuleEngine:
                 ),
                 status=ResultStatus.NEEDS_CONTEXT,
                 memo_template=(
-                    "참고문헌 추출 또는 저자 표기를 먼저 확인해 주세요. 대응 실패 "
-                    "비율이 높아 개별 누락 요청은 생성하지 않았습니다."
+                    "참고문헌 추출 또는 저자 표기 우선 확인 요. 대응 실패 "
+                    "비율이 높아 개별 누락 요청 생성 생략"
                 ),
             )
             return
@@ -197,8 +197,8 @@ class DeterministicRuleEngine:
                 ),
                 status=ResultStatus.NEEDS_CONTEXT,
                 memo_template=(
-                    "본문 인용 추출 또는 저자 표기를 먼저 확인해 주세요. 대응 실패 "
-                    "비율이 높아 개별 참고문헌 제외 요청은 생성하지 않았습니다."
+                    "본문 인용 추출 또는 저자 표기 우선 확인 요. 대응 실패 "
+                    "비율이 높아 개별 참고문헌 제외 요청 생성 생략"
                 ),
             )
             return
@@ -302,8 +302,8 @@ class DeterministicRuleEngine:
                 citation.location,
                 f"본문 인용 {citation.raw_text}에서 공저자 구분자가 잘못되었습니다",
                 memo_template=(
-                    "공저자는 쉼표(, )로 구분해야 합니다. "
-                    f"'{corrected}' 형식으로 수정해 주세요."
+                    "공저자 구분자 오류, 쉼표(, ) 사용 필요\n"
+                    f"수정 예: {corrected}"
                 ),
             )
 
@@ -325,7 +325,7 @@ class DeterministicRuleEngine:
                         current.location,
                         "국내문헌이 서양문헌 뒤에 배치되어 있습니다",
                         memo_template=(
-                            "국내문헌 → 서양문헌 → 동양문헌 순으로 배열해 주세요."
+                            "국내문헌 → 서양문헌 → 동양문헌 순 배열 필요"
                         ),
                     )
                 )
@@ -388,9 +388,9 @@ class DeterministicRuleEngine:
                 f"참고문헌 배열 위반 {len(violations)}건을 확인했습니다",
                 source=source,
                 memo_template=(
-                    "참고문헌 목록 전체의 배열 순서를 재검토해 주세요. "
-                    "자료군 순서, 저자명 가나다순(알파벳순), 동일 저자 연대순을 "
-                    "적용해 주세요."
+                    "참고문헌 목록 전체 배열 순서 재검토 필요. "
+                    "자료군 순서, 저자명 가나다순(알파벳순), 동일 저자 연대순 "
+                    "적용 필요"
                 ),
             )
             return [
@@ -452,17 +452,16 @@ class DeterministicRuleEngine:
                 source = RULES["CR-14"].source.model_copy(
                     update={"clause_number": clause, "section_title": clause}
                 )
-                corrected = (
-                    f"{author_period.group('authors')} {author_period.group('year')}."
-                )
+                year = author_period.group("year").strip("()")
+                corrected = f"{author_period.group('authors')} ({year})."
                 yield self._result(
                     "CR-14",
                     reference.location,
                     "국문 저자명 뒤에 불필요한 온점이 있습니다",
                     source=source,
                     memo_template=(
-                        "저자명 뒤의 온점을 삭제해 주세요. "
-                        f"'{corrected}' 형식으로 수정해 주세요."
+                        "저자명 뒤 온점 삭제 필요\n"
+                        f"수정 예: {corrected}"
                     ),
                 )
             capitalization_finding = _capitalization_finding(reference)
@@ -475,7 +474,7 @@ class DeterministicRuleEngine:
                     "콜론 뒤 부제의 첫 단어가 소문자로 시작합니다",
                     source=APA_SUBTITLE_SOURCE,
                     severity=Severity.WARNING,
-                    memo_template="콜론 뒤 부제의 첫 단어를 대문자로 시작해 주세요.",
+                    memo_template="콜론 뒤 부제 첫 단어 대문자 시작 필요",
                 )
             if BAD_SOURCE_SPACING.search(reference.raw_text):
                 yield self._result("CR-09", reference.location, "출처의 콜론 앞에 공백이 있습니다")
@@ -551,7 +550,43 @@ def _memo_text(
         f"{source.page}쪽 {source.section_title}" if source.page else source.section_title
     )
     action = memo_template or rule.memo_template
-    return f"{_human_location(location)}: {action} (근거: {source.document_name} {locator})"
+    _validate_memo_action(action)
+    return (
+        f"{_human_location(location)}\n"
+        f"{action}\n"
+        f"(근거: {source.document_name} {locator})"
+    )
+
+
+def _validate_memo_action(action: str) -> None:
+    prohibited = (
+        "주세요",
+        "바랍니다",
+        "하십시오",
+        "것 같",
+        "보입니다",
+        "제가",
+        "저희",
+        "우리 학회",
+        "아쉽게도",
+        "유감스럽게",
+        "잘못된",
+    )
+    if any(expression in action for expression in prohibited):
+        raise ValueError("memo action must use anonymous nominal style")
+    primary_line = action.splitlines()[0]
+    allowed_endings = (
+        "필요",
+        "요망",
+        "불일치",
+        "누락",
+        "확인 요",
+        "없음",
+        "생략",
+        "오류",
+    )
+    if primary_line.endswith(".") or not primary_line.endswith(allowed_endings):
+        raise ValueError("memo action must end in nominal style without a period")
 
 
 def _human_location(location: Location) -> str:
@@ -634,8 +669,8 @@ def _summarize_uncertain(
             f"자료군 구분을 확정할 수 없는 참고문헌이 {len(uncertain)}건입니다",
             status=ResultStatus.NEEDS_CONTEXT,
             memo_template=(
-                "로마자로 표기된 한국 저자 문헌이 포함되었는지 확인하고 "
-                "국내·서양·동양문헌 구간을 구분해 주세요."
+                "로마자 표기 한국 저자 문헌 포함 여부 확인 요. "
+                "국내·서양·동양문헌 구간 구분 필요"
             ),
         )
     ]

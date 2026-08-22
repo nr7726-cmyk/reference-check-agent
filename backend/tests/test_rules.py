@@ -13,7 +13,7 @@ from app.extraction.models import (
     ParsedManuscript,
     ReferenceItem,
 )
-from app.rules.engine import DeterministicRuleEngine
+from app.rules.engine import DeterministicRuleEngine, _memo_text
 from app.rules.models import CheckResult, ResultStatus, RuleSource, Severity
 from app.rules.normalization import normalize_text
 from app.rules.registry import COMMON, COMMON_VERSION, RULES, VERIFIED_AT
@@ -288,7 +288,7 @@ def test_cr14_removes_period_after_korean_author(raw_text: str, clause: str) -> 
     )
     assert result.severity == Severity.ERROR
     assert clause in result.memo_text
-    assert "저자명 뒤의 온점을 삭제" in result.memo_text
+    assert "저자명 뒤 온점 삭제 필요" in result.memo_text
 
 
 @pytest.mark.parametrize(
@@ -463,3 +463,44 @@ def test_memo_contains_actual_clause_and_rule_id() -> None:
     )
     assert f"{COMMON} Ⅱ-1)-(1)" in result.memo_text
     assert "CR-01" not in result.memo_text
+
+
+def test_all_rule_memos_use_anonymous_nominal_style() -> None:
+    forbidden = (
+        "주세요",
+        "바랍니다",
+        "하십시오",
+        "것 같",
+        "보입니다",
+        "제가",
+        "저희",
+        "우리 학회",
+        "아쉽게도",
+        "유감스럽게",
+        "잘못된",
+    )
+    for rule in RULES.values():
+        memo = _memo_text(rule, location=_location(0))
+        assert memo.splitlines()[0].startswith("본문 1번째 문단")
+        assert memo.splitlines()[-1].startswith("(근거:")
+        assert not any(expression in memo for expression in forbidden)
+        assert not rule.memo_template.splitlines()[0].endswith(".")
+
+
+def test_generated_memo_keeps_location_action_and_evidence_on_separate_lines() -> None:
+    reference = _reference(
+        0,
+        "윤희윤",
+        2020,
+        raw="윤희윤. (2020). 합성 제목.",
+    )
+    result = next(
+        item
+        for item in DeterministicRuleEngine().evaluate(_manuscript([], [reference]))
+        if item.rule_id == "CR-14"
+    )
+    lines = result.memo_text.splitlines()
+    assert lines[0].startswith("참고문헌 1번째 항목")
+    assert lines[1] == "저자명 뒤 온점 삭제 필요"
+    assert lines[2] == "수정 예: 윤희윤 (2020)."
+    assert lines[3].startswith("(근거:")

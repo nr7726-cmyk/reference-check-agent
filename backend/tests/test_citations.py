@@ -103,7 +103,7 @@ def test_missing_reference_section_suppresses_bulk_missing_results() -> None:
     assert manuscript.reference_section_found is False
     assert len(results) == 1
     assert results[0].rule_id == "CR-03"
-    assert "왕복 대조를 생략" in results[0].memo_text
+    assert "왕복 대조 생략" in results[0].memo_text
 
 
 def test_tiny_extraction_returns_review_instead_of_normal() -> None:
@@ -187,4 +187,4 @@ def test_high_missing_ratio_is_one_review_result() -> None:
 
     assert len(missing) == 1
     assert missing[0].rule_id == "CR-03"
-    assert "개별 누락 요청은 생성하지 않았습니다" in missing[0].memo_text
+    assert "개별 누락 요청 생성 생략" in missing[0].memo_text
