@@ -17,6 +17,9 @@ h2 { margin: 0 0 18px; font-size: 1.35rem; }
 .drop-zone button { margin-top: 10px; padding: 11px 22px; border: 0; border-radius: 10px; color: #fff; background: #2563eb; font-weight: 750; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .error { margin: 14px 0 0; padding: 12px 14px; border-radius: 10px; color: #9f1239; background: #fff1f2; }
+.error-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.error-actions .error { flex: 1 1 100%; }
+.error-actions button { padding: 8px 12px; border: 1px solid #b9c5d6; border-radius: 8px; background: #fff; font-weight: 750; }
 .progress-label, .card-top, .results-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
 progress { width: 100%; height: 12px; margin-top: 14px; accent-color: #2563eb; }
 .results { margin-top: 44px; }
@@ -24,6 +27,7 @@ progress { width: 100%; height: 12px; margin-top: 14px; accent-color: #2563eb; }
 .results-heading h2 { margin: 3px 0 0; }
 .result-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
 .result-actions p { margin: 0; color: #6c788c; font-size: .9rem; text-align: right; }
+.result-actions > div { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .result-actions button { padding: 9px 12px; border: 0; border-radius: 8px; color: #fff; background: #1d4ed8; font-weight: 750; }
 .category { margin: 12px 0; border: 1px solid #dce3ee; border-radius: 16px; background: #fff; overflow: hidden; }
 .category summary { padding: 18px 20px; display: flex; align-items: center; gap: 10px; color: #172033; font-weight: 800; cursor: pointer; list-style-position: inside; }
@@ -51,6 +55,8 @@ dd { margin: 0; color: #26344b; line-height: 1.55; overflow-wrap: anywhere; }
 .review-actions .approve { border-color: #15803d; color: #166534; }
 .review-actions .exclude { border-color: #dc2626; color: #991b1b; }
 .empty { margin: 6px; color: #7c8799; }
+.results-footer-actions { display: flex; flex-direction: column; align-items: center; gap: 9px; padding: 28px 12px 4px; color: #6c788c; text-align: center; font-size: .86rem; }
+.results-footer-actions button { padding: 11px 20px; border: 0; border-radius: 9px; color: #fff; background: #1d4ed8; font-weight: 800; }
 footer { padding: 32px 0 0; color: #7c8799; text-align: center; font-size: .82rem; }
 
 @media (max-width: 520px) {

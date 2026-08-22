@@ -3,6 +3,7 @@ import type { ChangeEvent, DragEvent } from 'react'
 import './App.css'
 
 const CATEGORIES = ['누락', '불일치', '형식수정', '확인 필요', '정상'] as const
+const INITIAL_STAGE = '원고를 업로드해 검사를 시작하세요.'
 type Category = (typeof CATEGORIES)[number]
 type Decision = 'pending' | 'approved' | 'edited' | 'excluded'
 
@@ -21,6 +22,7 @@ type Result = {
   location: Location
   finding: string
   memo_text: string
+  original_memo_text: string
   decision: Decision
   ai_assisted: boolean
   confidence: number
@@ -42,10 +44,12 @@ type SseEvent = { event: string; data: Record<string, unknown> }
 
 function App() {
   const inputRef = useRef<HTMLInputElement>(null)
+  const requestControllerRef = useRef<AbortController | null>(null)
+  const eventReaderRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(null)
   const [dragging, setDragging] = useState(false)
   const [busy, setBusy] = useState(false)
   const [progress, setProgress] = useState(0)
-  const [stage, setStage] = useState('원고를 업로드해 검사를 시작하세요.')
+  const [stage, setStage] = useState(INITIAL_STAGE)
   const [error, setError] = useState('')
   const [results, setResults] = useState<Result[]>([])
   const [copied, setCopied] = useState<Set<string>>(new Set())
@@ -79,27 +83,36 @@ function App() {
     setCheck(null)
     setProgress(2)
     setStage('파일을 업로드하고 있습니다.')
+    const controller = new AbortController()
+    requestControllerRef.current = controller
     try {
       const form = new FormData()
       form.append('files', file)
-      const response = await fetch('/api/v1/checks', { method: 'POST', body: form })
+      const response = await fetch('/api/v1/checks', {
+        method: 'POST',
+        body: form,
+        signal: controller.signal,
+      })
       if (!response.ok) throw new Error(await apiError(response))
       const check = (await response.json()) as CreatedCheck
       setCheck(check)
-      await consumeEvents(check)
+      await consumeEvents(check, controller.signal)
     } catch (reason) {
+      if (reason instanceof DOMException && reason.name === 'AbortError') return
       setError(reason instanceof Error ? reason.message : '검사를 시작하지 못했습니다.')
       setStage('검사가 중단되었습니다.')
     } finally {
+      if (requestControllerRef.current === controller) requestControllerRef.current = null
       setBusy(false)
     }
   }
 
-  async function consumeEvents(check: CreatedCheck) {
+  async function consumeEvents(check: CreatedCheck, signal: AbortSignal) {
     const authorization = { Authorization: `Bearer ${check.access_token}` }
-    const response = await fetch(check.events_url, { headers: authorization })
+    const response = await fetch(check.events_url, { headers: authorization, signal })
     if (!response.ok || !response.body) throw new Error(await apiError(response))
     const reader = response.body.getReader()
+    eventReaderRef.current = reader
     const decoder = new TextDecoder()
     let buffer = ''
     while (true) {
@@ -110,8 +123,10 @@ function App() {
       for (const frame of frames) handleEvent(parseEvent(frame))
       if (done) break
     }
+    eventReaderRef.current = null
     const resultResponse = await fetch(`/api/v1/checks/${check.id}/results`, {
       headers: authorization,
+      signal,
     })
     if (!resultResponse.ok) throw new Error(await apiError(resultResponse))
     setResults((await resultResponse.json()) as Result[])
@@ -210,16 +225,52 @@ function App() {
       URL.revokeObjectURL(url)
   }
 
+  async function resetToUpload(): Promise<boolean> {
+      const hasEditorWork = results.some(
+        (result) =>
+          result.decision !== 'pending'
+          || result.memo_text !== result.original_memo_text,
+      )
+      if (
+        hasEditorWork
+        && !window.confirm('현재 검사 결과가 사라집니다. 계속하시겠습니까?')
+      ) {
+        return false
+      }
+      requestControllerRef.current?.abort()
+      requestControllerRef.current = null
+      if (eventReaderRef.current) {
+        await eventReaderRef.current.cancel().catch(() => undefined)
+        eventReaderRef.current = null
+      }
+      setResults([])
+      setCheck(null)
+      setError('')
+      setProgress(0)
+      setCopied(new Set())
+      setSaving(new Set())
+      setStage(INITIAL_STAGE)
+      setDragging(false)
+      if (inputRef.current) inputRef.current.value = ''
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+      return true
+  }
+
+  async function startAnotherFile(file: File) {
+      if ((check || results.length > 0) && !await resetToUpload()) return
+      await startCheck(file)
+  }
+
   function onDrop(event: DragEvent<HTMLDivElement>) {
     event.preventDefault()
     setDragging(false)
     const file = event.dataTransfer.files[0]
-    if (file) void startCheck(file)
+    if (file) void startAnotherFile(file)
   }
 
   function onSelect(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]
-    if (file) void startCheck(file)
+    if (file) void startAnotherFile(file)
     event.target.value = ''
   }
 
@@ -258,7 +309,22 @@ function App() {
             onChange={onSelect}
           />
         </div>
-        {error && <p className="error" role="alert">{error}</p>}
+        {error && (
+          <div className="error-actions">
+            <p className="error" role="alert">{error}</p>
+            <button type="button" disabled={busy} onClick={() => inputRef.current?.click()}>
+              다시 시도
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              aria-label="새 원고 검사"
+              onClick={() => void resetToUpload()}
+            >
+              새 원고 검사
+            </button>
+          </div>
+        )}
       </section>
 
       {(busy || progress > 0) && (
@@ -276,15 +342,29 @@ function App() {
             <div><p className="eyebrow">검사 결과</p><h2 id="results-title">{results.length}개 항목</h2></div>
             <div className="result-actions">
               <p>메모를 검토한 뒤 승인·수정·제외할 수 있습니다.</p>
-              <button
-                type="button"
-                disabled={!results.some((result) => result.decision === 'approved')}
-                onClick={() => void downloadApproved()}
-              >
-                승인 항목 다운로드
-              </button>
+              <div>
+                <button
+                  type="button"
+                  disabled={!results.some((result) => result.decision === 'approved')}
+                  onClick={() => void downloadApproved()}
+                >
+                  승인 항목 다운로드
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  aria-label="새 원고 검사"
+                  onClick={() => void resetToUpload()}
+                >
+                  새 원고 검사
+                </button>
+              </div>
             </div>
           </div>
+          <div
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={onDrop}
+          >
           {CATEGORIES.map((category) => (
             <details className="category" key={category} open={grouped[category].length > 0}>
               <summary><span>{category}</span><span className="badge">{grouped[category].length}</span></summary>
@@ -352,6 +432,18 @@ function App() {
               </div>
             </details>
           ))}
+          </div>
+          <div className="results-footer-actions">
+            <button
+              type="button"
+              disabled={busy}
+              aria-label="새 원고 검사"
+              onClick={() => void resetToUpload()}
+            >
+              새 원고 검사
+            </button>
+            <span>다른 HWP/HWPX 파일을 이 결과 영역에 놓아도 새 검사를 시작합니다.</span>
+          </div>
         </section>
       )}
       <footer>AI가 보조한 결과는 최종 편집 판단을 대신하지 않습니다.</footer>
