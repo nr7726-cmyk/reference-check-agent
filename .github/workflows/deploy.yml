@@ -1,4 +1,4 @@
-name: Deploy Azure Container App
+name: Deploy Azure App Service
 
 on:
   workflow_dispatch:
@@ -20,41 +20,37 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Validate application
+        shell: bash
+        run: |
+          python -m pip install -e "backend[dev]"
+          PYTHONPATH=backend python -m pytest backend/tests -q
+          python -m ruff check backend
+          MYPYPATH=backend python -m mypy backend/app --strict
+          npm ci --prefix frontend
+          npm run build --prefix frontend
+
       - uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Build pinned Python 3.12 wheel set
-        if: inputs.with_runtime
-        shell: bash
-        run: |
-          # SDK 1.0.2 needs manylinux_2_28; pydantic-core still needs manylinux2014.
-          python -m pip download \
-            --dest "${RUNNER_TEMP}/wheelhouse" \
-            --requirement backend/requirements-ai.txt \
-            --platform manylinux_2_28_x86_64 \
-            --platform manylinux2014_x86_64 \
-            --only-binary=:all: \
-            --python-version 3.12
-
-      - name: Build image
+      - name: Deploy App Service infrastructure
         shell: bash
         env:
           WITH_RUNTIME: ${{ inputs.with_runtime }}
-        run: |
-          az acr build \
-            --registry "${{ vars.AZURE_REGISTRY_NAME }}" \
-            --image "reference-check-agent:${GITHUB_SHA}" \
-            --file Dockerfile \
-            --build-arg "INSTALL_AI_RUNTIME=${WITH_RUNTIME}" \
-            .
-
-      - name: Deploy infrastructure
-        shell: bash
-        env:
-          WITH_RUNTIME: ${{ inputs.with_runtime }}
+          APP_SERVICE_PLAN_NAME: ${{ vars.AZURE_APP_SERVICE_PLAN_NAME }}
           KEY_VAULT_NAME: ${{ vars.AZURE_KEY_VAULT_NAME }}
           TOKEN_SECRET_URI: ${{ vars.GITHUB_TOKEN_SECRET_URI }}
         run: |
@@ -62,11 +58,84 @@ jobs:
             KEY_VAULT_NAME=""
             TOKEN_SECRET_URI=""
           fi
+          parameters=(
+            "appName=${{ vars.AZURE_APP_NAME }}"
+            "keyVaultName=${KEY_VAULT_NAME}"
+            "githubTokenSecretUri=${TOKEN_SECRET_URI}"
+            "aiEnabled=${WITH_RUNTIME}"
+          )
+          if [[ -n "${APP_SERVICE_PLAN_NAME}" ]]; then
+            parameters+=("appServicePlanName=${APP_SERVICE_PLAN_NAME}")
+          fi
           az deployment group create \
             --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
             --template-file infra/bicep/main.bicep \
-            --parameters \
-              appName="${{ vars.AZURE_APP_NAME }}" \
-              containerImage="${{ vars.AZURE_REGISTRY_NAME }}.azurecr.io/reference-check-agent:${GITHUB_SHA}" \
-              keyVaultName="${KEY_VAULT_NAME}" \
-              githubTokenSecretUri="${TOKEN_SECRET_URI}"
+            --parameters "${parameters[@]}"
+
+      - name: Vendor Python 3.12 Linux wheels
+        shell: bash
+        env:
+          WITH_RUNTIME: ${{ inputs.with_runtime }}
+        run: |
+          requirements=backend/requirements.txt
+          if [[ "${WITH_RUNTIME}" == "true" ]]; then
+            requirements=backend/requirements-ai.txt
+          fi
+          mkdir -p "${RUNNER_TEMP}/package/.python_packages/lib/site-packages"
+          cp -R backend/app "${RUNNER_TEMP}/package/app"
+          cp -R frontend/dist "${RUNNER_TEMP}/package/static"
+          python -m pip install \
+            --requirement "${requirements}" \
+            --target "${RUNNER_TEMP}/package/.python_packages/lib/site-packages" \
+            --platform manylinux_2_28_x86_64 \
+            --platform manylinux2014_x86_64 \
+            --python-version 3.12 \
+            --implementation cp \
+            --abi cp312 \
+            --only-binary=:all:
+
+      - name: Create POSIX-path deployment ZIP
+        shell: bash
+        env:
+          PACKAGE_ROOT: ${{ runner.temp }}/package
+          PACKAGE_ZIP: ${{ runner.temp }}/reference-check.zip
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from zipfile import ZIP_DEFLATED, ZipFile
+
+          root = Path(os.environ["PACKAGE_ROOT"])
+          archive = Path(os.environ["PACKAGE_ZIP"])
+          with ZipFile(archive, "w", ZIP_DEFLATED) as target:
+              for source in root.rglob("*"):
+                  if source.is_file():
+                      target.write(source, source.relative_to(root).as_posix())
+          PY
+
+      - name: Deploy ZIP and restart
+        shell: bash
+        run: |
+          az webapp deploy \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --name "${{ vars.AZURE_APP_NAME }}" \
+            --type zip \
+            --src-path "${RUNNER_TEMP}/reference-check.zip" \
+            --clean true \
+            --restart false \
+            --output none
+          az webapp restart \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --name "${{ vars.AZURE_APP_NAME }}"
+
+      - name: Verify public health endpoint
+        shell: bash
+        run: |
+          url="https://${{ vars.AZURE_APP_NAME }}.azurewebsites.net/health/ready"
+          for attempt in {1..18}; do
+            if curl --fail --silent --show-error "${url}"; then
+              exit 0
+            fi
+            sleep 10
+          done
+          exit 1

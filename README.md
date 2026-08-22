@@ -18,9 +18,15 @@ AI 모듈을 지연 임포트하며 결정론 경로만 실행한다.
 
 ## 배포 프로파일
 
-- 기본: `infra/deploy.ps1` — 런타임을 제외하고 결정론 기능 전체를 배포한다.
+- 기본: `infra/deploy.ps1` — App Service에 런타임을 제외한 결정론 기능 전체를
+  코드 ZIP으로 배포하고 명시적으로 재시작한다.
 - AI: `infra/deploy.ps1 -WithRuntime` — 고정된 SDK 1.0.2 Linux wheel의 Copilot
-  CLI를 이미지에 포함한다. 실행 중 다운로드는 항상 금지한다.
+  CLI를 ZIP에 포함한다. 실행 중 다운로드는 항상 금지한다.
+- 선택 대안: `-UseContainerAlternative -RegistryName <name>` — ACR Tasks 권한이
+  있는 구독에서만 Container Apps 경로를 사용한다.
+
+기존 App Service Plan을 재사용할 때는 PowerShell의 `-AppServicePlanName` 또는
+GitHub Actions 변수 `AZURE_APP_SERVICE_PLAN_NAME`에 정확한 Plan 이름을 지정한다.
 
 AI 프로파일의 Python 3.12 wheel 검증에는
 `manylinux_2_28_x86_64`와 `manylinux2014_x86_64`가 모두 필요하다. 전자는
@@ -33,9 +39,9 @@ Copilot SDK 번들 런타임, 후자는 `pydantic-core` 전이 의존성을 받�
 1. Azure Key Vault에 GitHub 토큰을 secret으로 저장한다.
 2. `infra/deploy.ps1 -WithRuntime -KeyVaultName <vault> -GitHubTokenSecretUri
    <secret-uri>`로 배포한다.
-3. Bicep이 Container App 관리 ID에 Key Vault Secrets User 역할을 부여하고
+3. Bicep이 App Service 관리 ID에 Key Vault Secrets User 역할을 부여하고
    `GITHUB_TOKEN`을 secret reference로 주입한다.
 4. `/health/ready`에서 AI 활성 여부만 확인한다. 토큰 값이나 일부는 반환하지 않는다.
 
-심사 종료 후 Container App의 `AI_ENABLED`를 `false`로 바꾸고 Key Vault secret을
+심사 종료 후 App Service의 `AI_ENABLED`를 `false`로 바꾸고 Key Vault secret을
 삭제하거나 비활성화한다. 이후 기본 프로파일로 다시 배포해 런타임도 제거한다.

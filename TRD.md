@@ -14,15 +14,15 @@ MVP는 React + TypeScript 반응형 프론트엔드와 Python FastAPI 백엔드�
 - AI는 모호한 문맥 해석과 수정 요청 문구 생성만 수행한다.
 - 에이전트는 원고를 명령으로 취급하지 않으며 허용 목록의 읽기 전용 도구만 호출한다.
 - 업로드 파일과 파생 데이터는 단일 검사 세션의 짧은 수명 안에서만 존재한다.
-- MVP는 단일 Container App·단일 replica로 시작해 별도 데이터베이스와 큐를 도입하지 않는다.
+- MVP는 단일 Linux App Service 인스턴스로 시작해 별도 데이터베이스와 큐를 도입하지 않는다.
 
 ## 2. 아키텍처 개요
 
 ```mermaid
 flowchart LR
-    U[편집자 브라우저] -->|HTTPS 업로드/API| CA[Azure Container App]
-    CA --> FE[React 정적 앱]
-    CA --> API[FastAPI]
+    U[편집자 브라우저] -->|HTTPS 업로드/API| APP[Azure App Service]
+    APP --> FE[React 정적 앱]
+    APP --> API[FastAPI]
     API --> V[업로드 검증]
     V --> TMP[격리 임시 저장소]
     TMP --> EX[HWP/HWPX 추출 계층]
@@ -32,15 +32,14 @@ flowchart LR
     CP --> GM[GitHub Copilot 모델]
     API -->|SSE| U
     API --> OBS[Application Insights]
-    CA -->|Managed Identity| KV[Key Vault]
-    GHA[GitHub Actions] --> ACR[Azure Container Registry]
-    ACR --> CA
-    B[Bicep] --> CA
+    APP -->|Managed Identity| KV[Key Vault]
+    GHA[GitHub Actions] -->|POSIX-path ZIP| APP
+    B[Bicep] --> APP
     B --> KV
     B --> OBS
 ```
 
-React 빌드 산출물과 FastAPI를 한 컨테이너에서 제공한다. 브라우저는 업로드 후 세션 상태를 SSE로 구독한다. FastAPI는 임시 디렉터리에 파일을 저장하고 추출 직후 원본을 삭제한다. 구조화 데이터는 프로세스 메모리에만 유지하며 업로드 후 2시간에 만료한다.
+React 빌드 산출물과 FastAPI를 하나의 App Service 코드 패키지에서 제공한다. 브라우저는 업로드 후 세션 상태를 SSE로 구독한다. FastAPI는 임시 디렉터리에 파일을 저장하고 추출 직후 원본을 삭제한다. 구조화 데이터는 프로세스 메모리에만 유지하며 업로드 후 2시간에 만료한다.
 
 ## 3. 컴포넌트 구조
 
@@ -158,7 +157,7 @@ await workflow.run(workflow_input)
 - 공급자 호환 핀은 Agent Framework core 1.15.0, provider 1.0.3, Copilot SDK 1.0.2다.
 - 기본 배포 프로파일은 AI 패키지와 런타임을 제외한다. `--with-runtime` 프로파일만 SDK 1.0.2의 `manylinux_2_28_x86_64` wheel에 번들된 `copilot/bin/copilot`을 설치하고 실행 비트를 보정한다.
 - `COPILOT_SKIP_CLI_DOWNLOAD=1`을 항상 설정하고 `COPILOT_CLI_PATH`가 실제 파일일 때만 AI를 활성화한다. 실행 중 다운로드에 의존하지 않는다.
-- 프로덕션 인증 토큰은 Key Vault에서 Container App secret으로 주입하고 `CopilotClient(github_token=...)` 또는 Agent Framework 공급자 설정에 전달한다.
+- 프로덕션 인증 토큰은 Key Vault reference로 App Service에 주입하고 `CopilotClient(github_token=...)` 또는 Agent Framework 공급자 설정에 전달한다.
 - 모델 ID는 환경 설정으로 고정하고 배포 기록에 남긴다. Azure AI/BYOK provider는 사용하지 않는다.
 - 런타임의 셸·파일·URL 권한은 모두 거부한다. 애플리케이션 function tool만 허용한다.
 
@@ -370,28 +369,26 @@ event: failed         data: {code, stage, retryable, message}
 
 ### 10.1 최소 리소스
 
-- Azure Container Apps Environment
-- 외부 HTTPS ingress를 가진 Container App 1개
-- Azure Container Registry 1개
+- Linux App Service Plan(B1) 1개
+- 외부 HTTPS를 제공하는 Linux App Service 1개
 - Azure Key Vault 1개
 - Log Analytics Workspace + workspace-based Application Insights 1개
 - 위 리소스와 역할 할당을 정의하는 Bicep
 
 데이터베이스, Service Bus, Storage Account, Azure AI는 MVP에 추가하지 않는다.
 
-### 10.2 Container App
+### 10.2 App Service
 
-- 단일 이미지가 React 정적 파일과 FastAPI를 제공한다.
-- MVP replica는 `min=1`, `max=1`로 고정한다. 메모리 세션과 SSE 일관성을 위한 의도적 제한이다.
+- 단일 코드 ZIP이 React 정적 파일, FastAPI, Python 3.12 Linux wheel을 제공한다.
+- MVP 인스턴스 수는 1개로 고정한다. 메모리 세션과 SSE 일관성을 위한 의도적 제한이다.
 - CPU/메모리는 경계 픽스처 부하 시험으로 정하고 상한을 Bicep에 기록한다.
-- writable ephemeral storage의 세션별 무작위 디렉터리를 사용하고 공유 volume은 사용하지 않는다.
+- `/tmp`의 세션별 무작위 디렉터리를 사용하고 영구 공유 저장소는 사용하지 않는다.
 - SIGTERM 수신 시 신규 업로드를 거부하고 실행 작업을 취소한 뒤 임시 파일 삭제를 시도한다.
 
 ### 10.3 ID와 비밀
 
-- Container App system-assigned Managed Identity에 Key Vault secret `get` 최소 권한만 부여한다.
-- ACR pull은 `AcrPull` 역할로 제한한다.
-- GitHub Copilot 인증 토큰은 Key Vault reference로 Container App secret에 주입한다.
+- App Service system-assigned Managed Identity에 Key Vault Secrets User 역할만 부여한다.
+- GitHub Copilot 인증 토큰은 App Service Key Vault reference로 주입한다.
 - GitHub Actions는 OIDC federation으로 Azure에 로그인하며 장기 Azure client secret을 저장하지 않는다.
 
 ### 10.4 관찰 가능성과 비용
@@ -400,7 +397,7 @@ event: failed         data: {code, stage, retryable, message}
 - 기록 필드: correlation ID, 단계, 소요 시간, 파일 형식, 크기 bucket, 페이지 수, 규칙 ID, 결과 건수, 오류 코드, 토큰 사용량.
 - 금지 필드: 파일명 원문, 원고 텍스트, 저자명, 인용·참고문헌 원문, memo_text, 모델 prompt/response.
 - `/health/live`는 프로세스만, `/health/ready`는 규칙 레지스트리와 Copilot runtime 준비를 확인한다.
-- 로그 보존 기간, sampling, Container App 최대 replica를 IaC에 고정해 비용 폭주를 막는다.
+- 로그 보존 기간, sampling, App Service Plan SKU와 인스턴스 수를 IaC에 고정해 비용 폭주를 막는다.
 
 ### 10.5 CI/CD와 IaC
 
@@ -408,12 +405,18 @@ GitHub Actions는 다음 순서로 실행한다.
 
 1. 백엔드 lint/type/test와 프론트엔드 lint/type/test/build
 2. 합성 픽스처 통합·보안 테스트
-3. 컨테이너 이미지 build, SBOM 및 취약점 검사
-4. 커밋 SHA tag로 ACR push
-5. `az deployment group what-if` 후 Bicep 배포
-6. Container App revision 배포와 health smoke test
+3. React 빌드 후 기본 프로파일 또는 AI 프로파일의 Python 3.12 Linux wheel vendoring
+4. Python `zipfile`로 `/` 경로 구분자를 가진 배포 ZIP 생성
+5. Bicep으로 App Service·Managed Identity·Application Insights 배포
+6. `az webapp deploy` 후 `az webapp restart`, 공개 health smoke test
 7. 새 브라우저 컨텍스트에서 로그인 없는 E2E
-8. 실패 시 이전 정상 revision으로 traffic rollback
+8. 실패 시 이전 정상 코드 ZIP 재배포
+
+기본 경로는 App Service 코드 배포다. `SCM_DO_BUILD_DURING_DEPLOYMENT=false`와
+`ENABLE_ORYX_BUILD=false`를 유지해 Azure 원격 빌드에 의존하지 않는다. ACR Tasks
+권한이 있는 구독에서는 `infra/bicep/container-apps.bicep`과
+`infra/deploy.ps1 -UseContainerAlternative`로 컨테이너 배포를 선택할 수 있으나,
+ACR Tasks가 차단된 구독에서는 이 대안을 실행하지 않는다.
 
 ## 11. 보안 설계
 
@@ -520,7 +523,7 @@ GitHub Actions는 다음 순서로 실행한다.
 7. Agent Framework 5개 역할과 workflow를 function tool 허용 목록으로 구현한다.
 8. React 업로드, 진행, 카테고리 결과, 승인·수정·제외, 복사 UX를 구현한다.
 9. 통합·E2E·접근성·보안·성능 테스트를 완료한다.
-10. Bicep과 GitHub Actions로 Azure Container Apps에 배포한다.
+10. Bicep과 GitHub Actions로 Azure App Service에 코드 ZIP을 배포한다.
 11. 공개 URL을 새 브라우저 세션에서 검증하고 제출 커밋 SHA를 기록한다.
 
 ## 16. 공식 SDK 확인 기준
