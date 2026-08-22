@@ -87,5 +87,6 @@ class ParsedManuscript(BaseModel):
     citations: list[Citation]
     references: list[ReferenceItem]
     reference_section_found: bool = True
+    reference_section_method: Literal["heading", "inferred", "missing"] = "heading"
     body_text_sufficient: bool = True
     warnings: list[str] = Field(default_factory=list)

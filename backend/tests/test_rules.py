@@ -272,6 +272,7 @@ def test_cr13_ignores_names_and_periods_outside_parenthetical_citations() -> Non
     ("raw_text", "clause"),
     [
         ("윤희윤. (2020). 문명과 매체, 그리고 도서관. 대구: 합성출판사.", "Ⅱ-2)-(1)"),
+        ("윤희윤. 2020. 문명과 매체, 그리고 도서관. 대구: 합성출판사.", "Ⅱ-2)-(1)"),
         (
             "정영미, 배정희. (2015). 합성 제목. 합성학회지, 1(1), 1-10.",
             "Ⅱ-3)-(1)",
@@ -308,6 +309,76 @@ def test_cr14_ignores_valid_korean_and_western_author_forms(raw_text: str) -> No
     )
 
 
+def test_reference_group_hangul_and_year_order_use_original_positions() -> None:
+    references = [
+        _reference(0, "Alpha", 2020, kind="english"),
+        _reference(1, "나저자", 2021),
+        _reference(2, "가저자", 2020),
+        _reference(3, "가저자", 2019),
+    ]
+    results = DeterministicRuleEngine().evaluate(_manuscript([], references))
+    by_rule = {result.rule_id: result for result in results}
+    assert by_rule["CR-15"].location.reference_index == 1
+    assert by_rule["CR-16"].location.reference_index == 2
+    assert by_rule["CR-17"].location.reference_index == 3
+    assert "참고문헌 4번째 항목" in by_rule["CR-17"].memo_text
+
+
+def test_same_author_same_year_requires_ordered_suffixes() -> None:
+    references = [
+        _reference(0, "가저자", 2020, raw="가저자 (2020). 첫 번째 합성 제목."),
+        _reference(1, "가저자", 2020, raw="가저자 (2020). 두 번째 합성 제목."),
+    ]
+    results = DeterministicRuleEngine().evaluate(_manuscript([], references))
+    assert any(result.rule_id == "CR-18" for result in results)
+
+    references[0].raw_text = "가저자 (2020a). 첫 번째 합성 제목."
+    references[1].raw_text = "가저자 (2020b). 두 번째 합성 제목."
+    results = DeterministicRuleEngine().evaluate(_manuscript([], references))
+    assert all(result.rule_id != "CR-18" for result in results)
+
+
+def test_many_reference_order_errors_are_summarized() -> None:
+    references = [
+        _reference(0, "다저자", 2022),
+        _reference(1, "나저자", 2021),
+        _reference(2, "가저자", 2020),
+    ]
+    results = DeterministicRuleEngine(reference_order_summary_threshold=1).evaluate(
+        _manuscript([], references)
+    )
+    order_results = [
+        result for result in results if result.rule_id in {"CR-15", "CR-16", "CR-17"}
+    ]
+    assert len(order_results) == 1
+    assert order_results[0].rule_id == "CR-15"
+    assert "목록 전체" in order_results[0].memo_text
+
+
+def test_inferred_reference_section_skips_order_checks() -> None:
+    manuscript = _manuscript(
+        [],
+        [
+            _reference(0, "나저자", 2021),
+            _reference(1, "가저자", 2020),
+        ],
+    )
+    manuscript.reference_section_method = "inferred"
+    results = DeterministicRuleEngine().evaluate(manuscript)
+    assert not {result.rule_id for result in results} & {
+        "CR-15",
+        "CR-16",
+        "CR-17",
+        "CR-18",
+        "CR-19",
+    }
+
+
+def test_hangul_names_follow_ga_na_da_collation() -> None:
+    names = ["가저자", "김저자", "나저자"]
+    assert names == sorted(names)
+
+
 def test_normalizes_unicode_whitespace_punctuation_and_width() -> None:
     assert normalize_text("\uff21 lpha,  테스트") == normalize_text("Alpha 테스트")
 
@@ -327,6 +398,11 @@ def test_verified_rule_evidence_and_unverified_safety() -> None:
         "CR-11": "Ⅱ-1)-(4)",
         "CR-13": "Ⅰ-6)",  # noqa: RUF001 - official clause notation
         "CR-14": "Ⅱ-2)-(1)",
+        "CR-15": "Ⅱ-1)-(1)",
+        "CR-16": "Ⅱ-1)-(2)",
+        "CR-17": "Ⅱ-1)-(2)",
+        "CR-18": "Ⅱ-3)-(2)",
+        "CR-19": "Ⅱ-1)-(1)",
     }
     for rule_id, clause in expected_clauses.items():
         source = RULES[rule_id].source

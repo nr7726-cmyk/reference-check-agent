@@ -32,7 +32,7 @@ class CheckSummary(BaseModel):
 
 class ResultPatch(BaseModel):
     decision: Optional[Decision] = None
-    memo_text: Optional[str] = Field(default=None, min_length=1, max_length=180)
+    memo_text: Optional[str] = Field(default=None, min_length=1, max_length=500)
 
     @model_validator(mode="after")
     def has_change(self) -> ResultPatch:

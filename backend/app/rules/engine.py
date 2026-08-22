@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from itertools import pairwise
 from typing import Iterable
 
-from app.extraction.models import Location, ParsedManuscript, ReferenceItem
+from app.extraction.models import Citation, Location, ParsedManuscript, ReferenceItem
 from app.rules.models import (
     Category,
     CheckResult,
@@ -30,8 +31,9 @@ KOREAN_COAUTHOR_AND = re.compile(
 )
 KOREAN_AUTHOR_PERIOD = re.compile(
     r"^(?P<authors>[가-힣]{2,4}(?:\s*,\s*[가-힣]{2,4})*)\.\s+"
-    r"(?P<year>\((?:19|20)\d{2}[a-z]?\))"
+    r"(?P<year>\(?(?:19|20)\d{2}[a-z]?\)?)"
 )
+YEAR_SUFFIX = re.compile(r"[\(\[](?:19|20)\d{2}(?P<suffix>[a-z]?)[\)\]]")
 JOURNAL_DETAILS = re.compile(
     r",\s*\d+(?:\(\d+\))?,\s*(?:\d+[-\u2013]\d+|[A-Za-z]?\d+)"
 )
@@ -55,6 +57,18 @@ LOWERCASE_TITLE_WORDS = {
 
 
 class DeterministicRuleEngine:
+    def __init__(
+        self,
+        reference_order_summary_threshold: int = 5,
+        citation_missing_summary_ratio: float = 0.2,
+        citation_missing_summary_minimum: int = 5,
+    ) -> None:
+        self.reference_order_summary_threshold = max(1, reference_order_summary_threshold)
+        self.citation_missing_summary_ratio = min(
+            1.0, max(0.0, citation_missing_summary_ratio)
+        )
+        self.citation_missing_summary_minimum = max(1, citation_missing_summary_minimum)
+
     def evaluate(self, manuscript: ParsedManuscript) -> list[CheckResult]:
         results: list[CheckResult] = []
         if not manuscript.body_text_sufficient:
@@ -71,7 +85,7 @@ class DeterministicRuleEngine:
                 )
             )
             return results
-        if manuscript.reference_section_found:
+        if manuscript.reference_section_method == "heading":
             results.extend(self._citation_reference_checks(manuscript))
         else:
             location = (
@@ -84,18 +98,19 @@ class DeterministicRuleEngine:
                     "CR-03",
                     location,
                     (
-                        "참고문헌 목록을 자동으로 찾지 못했습니다. "
+                        "참고문헌 목록 경계를 확실하게 찾지 못했습니다. "
                         f"본문 인용 {len(manuscript.citations)}건만 추출했습니다"
                     ),
                     status=ResultStatus.NEEDS_CONTEXT,
                     memo_template=(
-                        "참고문헌 목록 위치와 형식을 확인해 주세요. 자동으로 목록을 "
+                        "참고문헌 목록 위치와 형식을 확인해 주세요. 확실한 경계를 "
                         "찾지 못해 본문 인용과의 왕복 대조를 생략했습니다."
                     ),
                 )
             )
         results.extend(self._compound_order_checks(manuscript))
         results.extend(self._citation_author_separator_checks(manuscript))
+        results.extend(self._reference_order_checks(manuscript))
         results.extend(self._english_conversion_checks(manuscript))
         results.extend(self._format_checks(manuscript))
         if not results:
@@ -116,31 +131,83 @@ class DeterministicRuleEngine:
         }
         reference_authors = {author for author, _ in reference_pairs}
 
+        unmatched: list[tuple[Citation, str]] = []
+        total_mentions = 0
         for citation in manuscript.citations:
             for mention in citation.mentions:
+                total_mentions += 1
                 pair = (normalize_name(mention.author), mention.year)
                 if pair not in reference_pairs:
                     rule_id = "CR-03" if pair[0] in reference_authors else "CR-01"
-                    status = (
-                        ResultStatus.NEEDS_CONTEXT if rule_id == "CR-03" else ResultStatus.DETECTED
-                    )
-                    yield self._result(
-                        rule_id,
-                        citation.location,
-                        f"본문 인용 '{citation.raw_text}'의 대응 참고문헌을 확정할 수 없습니다",
-                        status=status,
-                    )
+                    unmatched.append((citation, rule_id))
 
+        if (
+            len(unmatched) >= self.citation_missing_summary_minimum
+            and total_mentions
+            and len(unmatched) / total_mentions >= self.citation_missing_summary_ratio
+        ):
+            yield self._result(
+                "CR-03",
+                unmatched[0][0].location,
+                (
+                    f"본문 인용 {total_mentions}건 중 {len(unmatched)}건의 대응을 "
+                    "확정하지 못해 개별 누락 판정을 생략했습니다"
+                ),
+                status=ResultStatus.NEEDS_CONTEXT,
+                memo_template=(
+                    "참고문헌 추출 또는 저자 표기를 먼저 확인해 주세요. 대응 실패 "
+                    "비율이 높아 개별 누락 요청은 생성하지 않았습니다."
+                ),
+            )
+            return
+
+        for citation, rule_id in unmatched:
+            status = (
+                ResultStatus.NEEDS_CONTEXT
+                if rule_id == "CR-03"
+                else ResultStatus.DETECTED
+            )
+            yield self._result(
+                rule_id,
+                citation.location,
+                f"본문 인용 '{citation.raw_text}'의 대응 참고문헌을 확정할 수 없습니다",
+                status=status,
+            )
+
+        unmatched_references: list[ReferenceItem] = []
         for reference in manuscript.references:
             if not reference.authors or not reference.year:
                 continue
             pair = (normalize_name(reference.authors[0].raw), reference.year)
             if pair not in cited_pairs:
-                yield self._result(
-                    "CR-02",
-                    reference.location,
-                    "참고문헌에만 있고 본문 인용에서 찾지 못했습니다",
-                )
+                unmatched_references.append(reference)
+        if (
+            len(unmatched_references) >= self.citation_missing_summary_minimum
+            and manuscript.references
+            and len(unmatched_references) / len(manuscript.references)
+            >= self.citation_missing_summary_ratio
+        ):
+            yield self._result(
+                "CR-03",
+                unmatched_references[0].location,
+                (
+                    f"참고문헌 {len(manuscript.references)}건 중 "
+                    f"{len(unmatched_references)}건의 본문 인용을 찾지 못해 "
+                    "개별 제외 판정을 생략했습니다"
+                ),
+                status=ResultStatus.NEEDS_CONTEXT,
+                memo_template=(
+                    "본문 인용 추출 또는 저자 표기를 먼저 확인해 주세요. 대응 실패 "
+                    "비율이 높아 개별 참고문헌 제외 요청은 생성하지 않았습니다."
+                ),
+            )
+            return
+        for reference in unmatched_references:
+            yield self._result(
+                "CR-02",
+                reference.location,
+                "참고문헌에만 있고 본문 인용에서 찾지 못했습니다",
+            )
 
     def _compound_order_checks(self, manuscript: ParsedManuscript) -> Iterable[CheckResult]:
         order = {
@@ -239,6 +306,143 @@ class DeterministicRuleEngine:
                     f"'{corrected}' 형식으로 수정해 주세요."
                 ),
             )
+
+    def _reference_order_checks(
+        self, manuscript: ParsedManuscript
+    ) -> Iterable[CheckResult]:
+        if manuscript.reference_section_method != "heading":
+            return []
+
+        violations: list[CheckResult] = []
+        uncertain: list[CheckResult] = []
+        references = manuscript.references
+        ranks = {"korean": 0, "english": 1}
+        for previous, current in pairwise(references):
+            if ranks[current.list_kind] < ranks[previous.list_kind]:
+                violations.append(
+                    self._result(
+                        "CR-15",
+                        current.location,
+                        "국내문헌이 서양문헌 뒤에 배치되어 있습니다",
+                        memo_template=(
+                            "국내문헌 → 서양문헌 → 동양문헌 순으로 배열해 주세요."
+                        ),
+                    )
+                )
+
+        for reference in references:
+            if (
+                reference.list_kind == "korean"
+                and reference.authors
+                and not _is_hangul_name(reference.authors[0].raw)
+            ):
+                uncertain.append(
+                    self._result(
+                        "CR-19",
+                        reference.location,
+                        "저자 표기만으로 문헌 자료군을 확정할 수 없습니다",
+                        status=ResultStatus.NEEDS_CONTEXT,
+                    )
+                )
+
+        for start, end in _reference_runs(references):
+            run = references[start:end]
+            if not run:
+                continue
+            for previous, current in pairwise(run):
+                previous_name = _first_author(previous)
+                current_name = _first_author(current)
+                if previous_name is None or current_name is None:
+                    continue
+                if previous_name == current_name:
+                    violations.extend(self._same_author_order_violations(previous, current))
+                    continue
+                if (
+                    current.list_kind == "korean"
+                    and _is_hangul_name(previous.authors[0].raw)
+                    and _is_hangul_name(current.authors[0].raw)
+                    and current_name < previous_name
+                ):
+                    violations.append(
+                        self._result(
+                            "CR-16",
+                            current.location,
+                            (
+                                f"저자명 가나다순에서 참고문헌 "
+                                f"{previous.reference_index + 1}번째 항목보다 앞서야 합니다"
+                            ),
+                        )
+                    )
+
+        if len(violations) > self.reference_order_summary_threshold:
+            first = violations[0]
+            source = RULES["CR-15"].source.model_copy(
+                update={
+                    "clause_number": "Ⅱ-1)-(1), Ⅱ-1)-(2), Ⅱ-3)-(2)",
+                    "section_title": "참고문헌 배열 순서",
+                }
+            )
+            summary = self._result(
+                "CR-15",
+                first.location,
+                f"참고문헌 배열 위반 {len(violations)}건을 확인했습니다",
+                source=source,
+                memo_template=(
+                    "참고문헌 목록 전체의 배열 순서를 재검토해 주세요. "
+                    "자료군 순서, 저자명 가나다순(알파벳순), 동일 저자 연대순을 "
+                    "적용해 주세요."
+                ),
+            )
+            return [
+                summary,
+                *_summarize_uncertain(
+                    uncertain,
+                    self,
+                    threshold=self.reference_order_summary_threshold,
+                ),
+            ]
+        uncertain = _summarize_uncertain(
+            uncertain,
+            self,
+            threshold=self.reference_order_summary_threshold,
+        )
+        return [*violations, *uncertain]
+
+    def _same_author_order_violations(
+        self,
+        previous: ReferenceItem,
+        current: ReferenceItem,
+    ) -> list[CheckResult]:
+        if previous.year is None or current.year is None:
+            return []
+        if current.year < previous.year:
+            return [
+                self._result(
+                    "CR-17",
+                    current.location,
+                    (
+                        f"동일 저자 문헌이 참고문헌 {previous.reference_index + 1}번째 "
+                        "항목보다 오래된 출판연도인데 뒤에 배치되어 있습니다"
+                    ),
+                )
+            ]
+        if current.year != previous.year:
+            return []
+        previous_suffix = _year_suffix(previous.raw_text)
+        current_suffix = _year_suffix(current.raw_text)
+        if (
+            len(previous_suffix) == 1
+            and len(current_suffix) == 1
+            and ord(current_suffix) == ord(previous_suffix) + 1
+        ):
+            return []
+        return [
+            self._result(
+                "CR-18",
+                current.location,
+                "동일 저자·동일 발행년 문헌의 a, b, c 구분이 없거나 순서가 잘못되었습니다",
+            )
+        ]
 
     def _format_checks(self, manuscript: ParsedManuscript) -> Iterable[CheckResult]:
         for reference in manuscript.references:
@@ -384,6 +588,57 @@ def _reference_format_clause(reference: ReferenceItem) -> str:
     if "학위" in reference.raw_text:
         return "Ⅱ-4)-(1)"
     return "Ⅱ-2)-(1)"
+
+
+def _first_author(reference: ReferenceItem) -> str | None:
+    if not reference.authors:
+        return None
+    return normalize_name(reference.authors[0].raw)
+
+
+def _is_hangul_name(value: str) -> bool:
+    return re.fullmatch(r"[가-힣]{2,}(?:\s*,\s*[가-힣]{2,})*", value.strip()) is not None
+
+
+def _reference_runs(references: list[ReferenceItem]) -> list[tuple[int, int]]:
+    if not references:
+        return []
+    runs: list[tuple[int, int]] = []
+    start = 0
+    for index in range(1, len(references)):
+        if references[index].list_kind != references[start].list_kind:
+            runs.append((start, index))
+            start = index
+    runs.append((start, len(references)))
+    return runs
+
+
+def _year_suffix(raw_text: str) -> str:
+    match = YEAR_SUFFIX.search(raw_text)
+    return match.group("suffix") if match else ""
+
+
+def _summarize_uncertain(
+    uncertain: list[CheckResult],
+    engine: DeterministicRuleEngine,
+    *,
+    threshold: int = 5,
+) -> list[CheckResult]:
+    if len(uncertain) <= threshold:
+        return uncertain
+    first = uncertain[0]
+    return [
+        engine._result(
+            "CR-19",
+            first.location,
+            f"자료군 구분을 확정할 수 없는 참고문헌이 {len(uncertain)}건입니다",
+            status=ResultStatus.NEEDS_CONTEXT,
+            memo_template=(
+                "로마자로 표기된 한국 저자 문헌이 포함되었는지 확인하고 "
+                "국내·서양·동양문헌 구간을 구분해 주세요."
+            ),
+        )
+    ]
 
 
 def _is_journal_article(reference: ReferenceItem) -> bool:

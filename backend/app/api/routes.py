@@ -263,7 +263,7 @@ async def export_results(
         (result for result in state.results.values() if result.decision == Decision.APPROVED),
         key=lambda result: result.sort_key,
     )
-    content = "\n\n".join(f"{result.location.id}\n{result.memo_text}" for result in approved)
+    content = "\n\n".join(result.memo_text for result in approved)
     return Response(
         content=content.encode("utf-8"),
         media_type="text/plain; charset=utf-8",

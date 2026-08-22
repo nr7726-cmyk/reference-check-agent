@@ -42,7 +42,16 @@ class Settings:
     ip_hourly_limit: int = 10
     ip_concurrent_limit: int = 1
     session_hourly_limit: int = 120
-    memo_max_length: int = 180
+    memo_max_length: int = 500
+    reference_order_summary_threshold: int = field(
+        default_factory=lambda: _env_int("REFERENCE_ORDER_SUMMARY_THRESHOLD", 5)
+    )
+    citation_missing_summary_ratio: float = field(
+        default_factory=lambda: _env_float("CITATION_MISSING_SUMMARY_RATIO", 0.2)
+    )
+    citation_missing_summary_minimum: int = field(
+        default_factory=lambda: _env_int("CITATION_MISSING_SUMMARY_MINIMUM", 5)
+    )
     multipart_overhead_bytes: int = 1024 * 1024
     enable_ai_layer: bool | None = field(
         default_factory=lambda: (

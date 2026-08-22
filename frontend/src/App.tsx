@@ -4,6 +4,7 @@ import './App.css'
 
 const CATEGORIES = ['누락', '불일치', '형식수정', '확인 필요', '정상'] as const
 type Category = (typeof CATEGORIES)[number]
+type Decision = 'pending' | 'approved' | 'edited' | 'excluded'
 
 type Location = {
   section_label: string
@@ -20,6 +21,9 @@ type Result = {
   location: Location
   finding: string
   memo_text: string
+  decision: Decision
+  ai_assisted: boolean
+  confidence: number
   rule_id: string
   rule_source: {
     document_name: string
@@ -45,6 +49,8 @@ function App() {
   const [error, setError] = useState('')
   const [results, setResults] = useState<Result[]>([])
   const [copied, setCopied] = useState<Set<string>>(new Set())
+  const [check, setCheck] = useState<CreatedCheck | null>(null)
+  const [saving, setSaving] = useState<Set<string>>(new Set())
 
   const grouped = useMemo(
     () =>
@@ -70,6 +76,7 @@ function App() {
     setBusy(true)
     setResults([])
     setCopied(new Set())
+    setCheck(null)
     setProgress(2)
     setStage('파일을 업로드하고 있습니다.')
     try {
@@ -78,6 +85,7 @@ function App() {
       const response = await fetch('/api/v1/checks', { method: 'POST', body: form })
       if (!response.ok) throw new Error(await apiError(response))
       const check = (await response.json()) as CreatedCheck
+      setCheck(check)
       await consumeEvents(check)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '검사를 시작하지 못했습니다.')
@@ -133,6 +141,73 @@ function App() {
     } catch {
       setError('복사하지 못했습니다. 아래 메모 문구를 직접 선택해 복사해 주세요.')
     }
+  }
+
+  function editMemo(resultId: string, memoText: string) {
+      setResults((current) =>
+        current.map((result) =>
+          result.id === resultId
+            ? { ...result, memo_text: memoText, decision: 'edited' }
+            : result,
+        ),
+      )
+      setCopied((current) => {
+        const next = new Set(current)
+        next.delete(resultId)
+        return next
+      })
+    }
+
+  async function patchResult(
+      result: Result,
+      patch: { memo_text?: string; decision?: Decision },
+    ) {
+      if (!check) return
+      setSaving((current) => new Set(current).add(result.id))
+      setError('')
+      try {
+        const response = await fetch(
+          `/api/v1/checks/${check.id}/results/${result.id}`,
+          {
+            method: 'PATCH',
+            headers: {
+              Authorization: `Bearer ${check.access_token}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(patch),
+          },
+        )
+        if (!response.ok) throw new Error(await apiError(response))
+        const updated = (await response.json()) as Result
+        setResults((current) =>
+          current.map((item) => (item.id === updated.id ? updated : item)),
+        )
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : '결과를 저장하지 못했습니다.')
+      } finally {
+        setSaving((current) => {
+          const next = new Set(current)
+          next.delete(result.id)
+          return next
+        })
+      }
+    }
+
+  async function downloadApproved() {
+      if (!check) return
+      const response = await fetch(`/api/v1/checks/${check.id}/export`, {
+        headers: { Authorization: `Bearer ${check.access_token}` },
+      })
+      if (!response.ok) {
+        setError(await apiError(response))
+        return
+      }
+      const url = URL.createObjectURL(await response.blob())
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = '수정-요청서.txt'
+      anchor.click()
+      URL.revokeObjectURL(url)
   }
 
   function onDrop(event: DragEvent<HTMLDivElement>) {
@@ -199,7 +274,16 @@ function App() {
         <section className="results" aria-labelledby="results-title">
           <div className="results-heading">
             <div><p className="eyebrow">검사 결과</p><h2 id="results-title">{results.length}개 항목</h2></div>
-            <p>복사 버튼은 한글 메모에 붙여 넣을 문구만 복사합니다.</p>
+            <div className="result-actions">
+              <p>메모를 검토한 뒤 승인·수정·제외할 수 있습니다.</p>
+              <button
+                type="button"
+                disabled={!results.some((result) => result.decision === 'approved')}
+                onClick={() => void downloadApproved()}
+              >
+                승인 항목 다운로드
+              </button>
+            </div>
           </div>
           {CATEGORIES.map((category) => (
             <details className="category" key={category} open={grouped[category].length > 0}>
@@ -210,7 +294,17 @@ function App() {
                 ) : grouped[category].map((result) => (
                   <article className={`result-card ${copied.has(result.id) ? 'copied' : ''}`} key={result.id}>
                     <div className="card-top">
-                      <span className="severity">{result.severity}</span>
+                      <div className="labels">
+                        <span className="severity">{result.severity}</span>
+                        {result.ai_assisted && (
+                          <span className="ai-label">
+                            AI 보조 · 신뢰도 {Math.round(result.confidence * 100)}%
+                          </span>
+                        )}
+                        <span className={`decision decision-${result.decision}`}>
+                          {decisionText(result.decision)}
+                        </span>
+                      </div>
                       <button className="copy-button" type="button" onClick={() => void copyMemo(result)}>
                         {copied.has(result.id) ? '✓ 복사됨' : '⧉ 복사'}
                       </button>
@@ -220,7 +314,39 @@ function App() {
                       <div><dt>발견 내용</dt><dd>{result.finding}</dd></div>
                       <div><dt>근거 규정</dt><dd>{result.rule_id} · {result.rule_source.document_name} {result.rule_source.clause_number ?? result.rule_source.section_title}</dd></div>
                     </dl>
-                    <p className="memo" tabIndex={0}>{result.memo_text}</p>
+                    <label className="memo-label" htmlFor={`memo-${result.id}`}>저자용 수정 요청 문구</label>
+                    <textarea
+                      id={`memo-${result.id}`}
+                      className="memo"
+                      maxLength={500}
+                      value={result.memo_text}
+                      onChange={(event) => editMemo(result.id, event.target.value)}
+                    />
+                    <div className="review-actions">
+                      <button
+                        type="button"
+                        disabled={saving.has(result.id)}
+                        onClick={() => void patchResult(result, { memo_text: result.memo_text })}
+                      >
+                        수정 저장
+                      </button>
+                      <button
+                        className="approve"
+                        type="button"
+                        disabled={saving.has(result.id)}
+                        onClick={() => void patchResult(result, { memo_text: result.memo_text, decision: 'approved' })}
+                      >
+                        승인
+                      </button>
+                      <button
+                        className="exclude"
+                        type="button"
+                        disabled={saving.has(result.id)}
+                        onClick={() => void patchResult(result, { decision: 'excluded' })}
+                      >
+                        제외
+                      </button>
+                    </div>
                   </article>
                 ))}
               </div>
@@ -257,9 +383,19 @@ function locationText(location: Location): string {
     const context = location.display_hint ? ` (${location.display_hint})` : ''
     return `참고문헌 ${location.reference_index + 1}번째 항목${context}`
   }
+
   if (location.display_hint.startsWith('본문 인용 ')) return location.display_hint
   const context = location.display_hint ? ` · “${location.display_hint}”` : ''
   return `본문 ${location.paragraph_index + 1}번째 문단${context}`
+}
+
+function decisionText(decision: Decision): string {
+  return {
+    pending: '검토 전',
+    approved: '승인',
+    edited: '수정됨',
+    excluded: '제외',
+  }[decision]
 }
 
 export default App

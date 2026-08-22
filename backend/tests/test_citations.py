@@ -119,3 +119,72 @@ def test_tiny_extraction_returns_review_instead_of_normal() -> None:
     assert manuscript.body_text_sufficient is False
     assert len(results) == 1
     assert "본문을 충분히" in results[0].finding
+
+
+def test_narrative_sentence_is_not_inferred_as_reference() -> None:
+    paragraphs = [
+        *[
+            _paragraph(index, "충분한 합성 본문 문장입니다. " * 8)
+            for index in range(6)
+        ],
+        _paragraph(6, "김영석(2018)은 합성 개념이라고 정의하였다."),
+        _paragraph(7, "다른 합성 본문 문장이다."),
+    ]
+    manuscript = parse_manuscript(
+        ExtractedDocument(format="hwp", paragraphs=paragraphs)
+    )
+
+    assert manuscript.reference_section_found is False
+    assert manuscript.references == []
+
+
+def test_parses_bare_year_reference_but_not_narrative_citation() -> None:
+    document = ExtractedDocument(
+        format="hwp",
+        paragraphs=[
+            _paragraph(0, "충분한 합성 본문 " * 40),
+            _paragraph(1, "참고문헌"),
+            _paragraph(2, "가상저자. 2020. 합성 제목. 서울: 합성출판사."),
+        ],
+    )
+    manuscript = parse_manuscript(document)
+
+    assert manuscript.reference_section_method == "heading"
+    assert manuscript.references[0].authors[0].raw == "가상저자"
+    assert manuscript.references[0].year == 2020
+
+
+def test_multi_author_citation_matches_by_first_author_and_year() -> None:
+    document = ExtractedDocument(
+        format="hwp",
+        paragraphs=[
+            _paragraph(0, "충분한 합성 본문 (김이경, 안지윤, 황혜정, 김경현, 2017) " * 20),
+            _paragraph(1, "참고문헌"),
+            _paragraph(2, "김이경, 안지윤, 황혜정, 김경현 (2017). 합성 제목."),
+        ],
+    )
+    manuscript = parse_manuscript(document)
+    results = DeterministicRuleEngine().evaluate(manuscript)
+
+    assert manuscript.citations[0].mentions[0].author == "김이경"
+    assert all(result.rule_id not in {"CR-01", "CR-03"} for result in results)
+
+
+def test_high_missing_ratio_is_one_review_result() -> None:
+    citations = "; ".join(
+        f"가상{chr(ord('가') + index)}, 2020" for index in range(8)
+    )
+    document = ExtractedDocument(
+        format="hwp",
+        paragraphs=[
+            _paragraph(0, f"충분한 합성 본문 ({citations}) " * 10),
+            _paragraph(1, "참고문헌"),
+            _paragraph(2, "다른저자 (2021). 합성 제목."),
+        ],
+    )
+    results = DeterministicRuleEngine().evaluate(parse_manuscript(document))
+    missing = [result for result in results if result.rule_id in {"CR-01", "CR-03"}]
+
+    assert len(missing) == 1
+    assert missing[0].rule_id == "CR-03"
+    assert "개별 누락 요청은 생성하지 않았습니다" in missing[0].memo_text

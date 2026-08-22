@@ -56,7 +56,12 @@ class DeterministicPipeline:
                 state, CheckStatus.CHECKING, 55, "인용과 참고문헌을 대조하고 있습니다"
             )
             manuscript = await _run_blocking(parse_manuscript, document)
-            results = await _run_blocking(DeterministicRuleEngine().evaluate, manuscript)
+            engine = DeterministicRuleEngine(
+                self.store.settings.reference_order_summary_threshold,
+                self.store.settings.citation_missing_summary_ratio,
+                self.store.settings.citation_missing_summary_minimum,
+            )
+            results = await _run_blocking(engine.evaluate, manuscript)
             await self._stage(
                 state,
                 CheckStatus.REVIEWING,

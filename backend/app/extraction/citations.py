@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from typing import Literal
 
 from app.extraction.models import (
     AuthorName,
@@ -35,8 +36,13 @@ MENTION = re.compile(
     r"\s*,?\s*(?P<year>(?:19|20)\d{2})"
 )
 YEAR = re.compile(r"[\(\[]((?:19|20)\d{2})[a-z]?[\)\]]")
+REFERENCE_YEAR = re.compile(
+    r"(?:[\(\[]((?:19|20)\d{2})[a-z]?[\)\]]|"
+    r"(?<!\d)((?:19|20)\d{2})[a-z]?\.)"
+)
 REFERENCE_ENTRY = re.compile(
-    r"^.{1,120}?[\(\[](?:19|20)\d{2}[a-z]?[\)\]]\s*[.)]?\s*\S+",
+    r"^.{1,120}?(?:\s+[\(\[](?:19|20)\d{2}[a-z]?[\)\]]\.|"
+    r"\.\s+(?:19|20)\d{2}[a-z]?\.)\s+\S+",
     re.DOTALL,
 )
 DOI = re.compile(r"(?:https?://doi\.org/|doi:\s*)?(10\.\d{4,9}/[-._;()/:A-Z0-9]+)", re.I)
@@ -44,7 +50,7 @@ URL = re.compile(r"https?://[^\s<>\]]+", re.I)
 
 
 def parse_manuscript(document: ExtractedDocument) -> ParsedManuscript:
-    reference_index = _find_reference_section(document)
+    reference_index, reference_method = _find_reference_section(document)
     reference_section_found = reference_index is not None
     split_index = reference_index if reference_index is not None else len(document.paragraphs)
     body = document.paragraphs[:split_index]
@@ -68,18 +74,22 @@ def parse_manuscript(document: ExtractedDocument) -> ParsedManuscript:
         citations=citations,
         references=references,
         reference_section_found=reference_section_found,
+        reference_section_method=reference_method,
         body_text_sufficient=body_text_sufficient,
         warnings=warnings,
     )
 
 
-def _find_reference_section(document: ExtractedDocument) -> int | None:
+def _find_reference_section(
+    document: ExtractedDocument,
+) -> tuple[int | None, Literal["heading", "inferred", "missing"]]:
     for index, paragraph in enumerate(document.paragraphs):
         if _is_reference_heading(paragraph.text) and _references_follow(
             document.paragraphs, index + 1, minimum=1
         ):
-            return index
-    return _infer_reference_start(document.paragraphs)
+            return index, "heading"
+    inferred = _infer_reference_start(document.paragraphs)
+    return (inferred, "inferred") if inferred is not None else (None, "missing")
 
 
 def _is_reference_heading(text: str) -> bool:
@@ -88,7 +98,10 @@ def _is_reference_heading(text: str) -> bool:
 
 
 def _is_reference_entry(text: str) -> bool:
-    return REFERENCE_ENTRY.match(text.strip()) is not None
+    candidate = text.strip()
+    if REFERENCE_ENTRY.match(candidate) is None:
+        return False
+    return re.search(r"(?:하였다|한다|이다|라고|이었다|였다)[.!?]?$", candidate) is None
 
 
 def _references_follow(
@@ -171,14 +184,28 @@ def extract_citations(paragraphs: list[Paragraph]) -> list[Citation]:
 def _parse_mentions(text: str) -> list[CitationMention]:
     mentions: list[CitationMention] = []
     for segment in text.split(";"):
-        match = MENTION.search(segment)
-        if not match:
+        years = [int(year) for year in re.findall(r"(?:19|20)\d{2}", segment)]
+        if not years:
             continue
-        author = match.group("author").strip()
-        mentions.append(CitationMention(author=author, year=int(match.group("year"))))
-        for year in re.findall(r"(?:19|20)\d{2}", segment[match.end() :]):
-            mentions.append(CitationMention(author=author, year=int(year)))
+        year_start = re.search(r"(?:19|20)\d{2}", segment)
+        assert year_start is not None
+        author_area = segment[: year_start.start()].strip(" ,")
+        author = _primary_citation_author(author_area)
+        if author is None:
+            match = MENTION.search(segment)
+            if match is None:
+                continue
+            author = match.group("author").strip()
+        mentions.extend(CitationMention(author=author, year=year) for year in years)
     return mentions
+
+
+def _primary_citation_author(author_area: str) -> str | None:
+    korean = re.match(r"([가-힣]{2,8})(?:\s*(?:,|외\b|;|[.·\u2024ㆍ/]))", author_area)
+    if korean:
+        return korean.group(1)
+    western = re.match(r"([A-Z][A-Za-z'\u2019\u2013-]+)", author_area)
+    return western.group(1) if western else None
 
 
 def extract_references(paragraphs: list[Paragraph]) -> list[ReferenceItem]:
@@ -189,7 +216,7 @@ def extract_references(paragraphs: list[Paragraph]) -> list[ReferenceItem]:
             if ENGLISH_HEADING.search(paragraph.text):
                 list_kind = "english"
             continue
-        if not YEAR.search(paragraph.text):
+        if not REFERENCE_YEAR.search(paragraph.text):
             continue
         index = len(references)
         location = Location(
@@ -202,7 +229,7 @@ def extract_references(paragraphs: list[Paragraph]) -> list[ReferenceItem]:
 
 
 def _parse_reference(text: str, location: Location, index: int, list_kind: str) -> ReferenceItem:
-    year_match = YEAR.search(text)
+    year_match = REFERENCE_YEAR.search(text)
     assert year_match is not None
     author_text = text[: year_match.start()].strip(" .")
     remainder = text[year_match.end() :].strip(" .")
@@ -221,7 +248,7 @@ def _parse_reference(text: str, location: Location, index: int, list_kind: str) 
         reference_index=index,
         raw_text=text,
         authors=authors,
-        year=int(year_match.group(1)),
+        year=int(year_match.group(1) or year_match.group(2)),
         title=title,
         doi=doi_match.group(1).rstrip(".,)") if doi_match else None,
         url=url_match.group(0).rstrip(".,)") if url_match else None,
