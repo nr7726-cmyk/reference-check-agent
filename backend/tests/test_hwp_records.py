@@ -41,8 +41,25 @@ def test_reads_file_header_security_flags() -> None:
 
 
 def test_decodes_text_and_removes_controls_and_private_use() -> None:
-    payload = "가상\u0001 저자\ue000".encode("utf-16le")
+    payload = "가상\u0000 저자\ue000".encode("utf-16le")
     assert decode_paragraph_text(payload) == "가상 저자"
+
+
+def test_discards_full_eight_wchar_controls_and_preserves_hanja() -> None:
+    prefix = "앞".encode("utf-16le")
+    inline = struct.pack("<8H", 4, 0x6D65, 0x2525, 0xFF01, 0x00FF, 1, 2, 4)
+    tab = struct.pack("<8H", 9, 0x6D65, 0x2525, 0xFF01, 0x00FF, 3, 4, 9)
+
+    decoded = decode_paragraph_text(
+        prefix
+        + inline
+        + "圖書館".encode("utf-16le")
+        + tab
+        + "뒤".encode("utf-16le")
+    )
+
+    assert decoded == "앞圖書館 뒤"
+    assert not {"浥", "\uff01", "ÿ"} & set(decoded)
 
 
 def test_extracts_paragraph_and_reports_memo_and_unknown_tags() -> None:

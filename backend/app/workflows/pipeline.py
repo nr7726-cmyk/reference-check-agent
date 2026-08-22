@@ -60,6 +60,7 @@ class DeterministicPipeline:
                 self.store.settings.reference_order_summary_threshold,
                 self.store.settings.citation_missing_summary_ratio,
                 self.store.settings.citation_missing_summary_minimum,
+                self.store.settings.review_repeat_summary_threshold,
             )
             results = await _run_blocking(engine.evaluate, manuscript)
             await self._stage(

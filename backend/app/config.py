@@ -52,6 +52,9 @@ class Settings:
     citation_missing_summary_minimum: int = field(
         default_factory=lambda: _env_int("CITATION_MISSING_SUMMARY_MINIMUM", 5)
     )
+    review_repeat_summary_threshold: int = field(
+        default_factory=lambda: _env_int("REVIEW_REPEAT_SUMMARY_THRESHOLD", 5)
+    )
     multipart_overhead_bytes: int = 1024 * 1024
     enable_ai_layer: bool | None = field(
         default_factory=lambda: (

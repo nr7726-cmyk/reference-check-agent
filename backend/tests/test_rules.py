@@ -355,6 +355,31 @@ def test_many_reference_order_errors_are_summarized() -> None:
     assert "목록 전체" in order_results[0].memo_text
 
 
+def test_repeated_review_items_are_summarized_by_rule() -> None:
+    references = [
+        _reference(
+            index,
+            f"Author{index}",
+            2020 + index,
+            kind="english",
+            title=f"Synthetic article {index}",
+            raw=(
+                f"Author{index}. ({2020 + index}). Synthetic article {index}. "
+                f"Journal of Examples, 1(1), {index + 1}-{index + 2}."
+            ),
+            doi=None,
+        )
+        for index in range(6)
+    ]
+    results = DeterministicRuleEngine(review_repeat_summary_threshold=5).evaluate(
+        _manuscript([], references)
+    )
+    doi_reviews = [result for result in results if result.rule_id == "CR-10"]
+    assert len(doi_reviews) == 1
+    assert doi_reviews[0].memo_text.startswith("참고문헌 목록 전체\n")
+    assert "6건" in doi_reviews[0].memo_text
+
+
 def test_inferred_reference_section_skips_order_checks() -> None:
     manuscript = _manuscript(
         [],

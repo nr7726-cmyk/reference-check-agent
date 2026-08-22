@@ -62,12 +62,14 @@ class DeterministicRuleEngine:
         reference_order_summary_threshold: int = 5,
         citation_missing_summary_ratio: float = 0.2,
         citation_missing_summary_minimum: int = 5,
+        review_repeat_summary_threshold: int = 5,
     ) -> None:
         self.reference_order_summary_threshold = max(1, reference_order_summary_threshold)
         self.citation_missing_summary_ratio = min(
             1.0, max(0.0, citation_missing_summary_ratio)
         )
         self.citation_missing_summary_minimum = max(1, citation_missing_summary_minimum)
+        self.review_repeat_summary_threshold = max(1, review_repeat_summary_threshold)
 
     def evaluate(self, manuscript: ParsedManuscript) -> list[CheckResult]:
         results: list[CheckResult] = []
@@ -116,6 +118,10 @@ class DeterministicRuleEngine:
         if not results:
             location = manuscript.document.paragraphs[0].location
             results.append(self._result("CR-12", location, "활성화된 결정론적 검사를 통과했습니다"))
+        results = _summarize_repeated_review_results(
+            results,
+            self.review_repeat_summary_threshold,
+        )
         return sorted(results, key=lambda result: result.sort_key)
 
     def _citation_reference_checks(self, manuscript: ParsedManuscript) -> Iterable[CheckResult]:
@@ -674,6 +680,51 @@ def _summarize_uncertain(
             ),
         )
     ]
+
+
+def _summarize_repeated_review_results(
+    results: list[CheckResult],
+    threshold: int,
+) -> list[CheckResult]:
+    groups: dict[str, list[CheckResult]] = defaultdict(list)
+    for result in results:
+        if result.severity == Severity.NEEDS_REVIEW:
+            groups[result.rule_id].append(result)
+    repeated_ids = {
+        rule_id for rule_id, items in groups.items() if len(items) > threshold
+    }
+    if not repeated_ids:
+        return results
+
+    summarized: list[CheckResult] = []
+    emitted: set[str] = set()
+    for result in results:
+        if result.rule_id not in repeated_ids:
+            summarized.append(result)
+            continue
+        if result.rule_id in emitted:
+            continue
+        emitted.add(result.rule_id)
+        items = groups[result.rule_id]
+        lines = result.memo_text.splitlines()
+        action = lines[1] if len(lines) >= 3 else RULES[result.rule_id].memo_template
+        evidence = lines[-1]
+        summarized.append(
+            result.model_copy(
+                update={
+                    "finding": (
+                        f"동일한 확인 사유의 {result.rule_id} 항목 "
+                        f"{len(items)}건을 목록 단위로 요약했습니다"
+                    ),
+                    "memo_text": (
+                        "참고문헌 목록 전체\n"
+                        f"{action} ({len(items)}건) 일괄 확인 요\n"
+                        f"{evidence}"
+                    ),
+                }
+            )
+        )
+    return summarized
 
 
 def _is_journal_article(reference: ReferenceItem) -> bool:

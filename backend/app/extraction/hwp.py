@@ -66,8 +66,28 @@ def parse_record_stream(data: bytes) -> list[HwpRecord]:
 def decode_paragraph_text(payload: bytes) -> str:
     if len(payload) % 2:
         raise CorruptDocumentError("HWP 문단 텍스트의 UTF-16LE 길이가 올바르지 않습니다")
+    units = list(struct.unpack(f"<{len(payload) // 2}H", payload))
+    kept: list[int] = []
+    index = 0
+    wide_controls = {*range(1, 10), *range(11, 24)}
+    while index < len(units):
+        code = units[index]
+        if code in wide_controls:
+            if code == 9:
+                kept.append(ord(" "))
+            index += 8
+            continue
+        if code in {10, 13}:
+            kept.append(ord(" "))
+            index += 1
+            continue
+        if code < 32:
+            index += 1
+            continue
+        kept.append(code)
+        index += 1
     try:
-        text = payload.decode("utf-16le")
+        text = struct.pack(f"<{len(kept)}H", *kept).decode("utf-16le") if kept else ""
     except UnicodeDecodeError as exc:
         raise CorruptDocumentError("HWP 문단 텍스트를 디코딩할 수 없습니다") from exc
     cleaned = "".join(
